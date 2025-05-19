@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routers import posts as posts_router # Renombrado para claridad
 from app.core.config import settings
+from app.api.v1.routers import auth as auth_router 
 
 app = FastAPI(
     title="SocialMediaBE API",
@@ -28,8 +29,17 @@ app.add_middleware(
     allow_headers=["*"],  # Permite todos los encabezados
 )
 
-# Incluir routers de la API
-app.include_router(posts_router.router, prefix=settings.API_V1_STR, tags=["Posts"]) # tags aquí son para la sección general
+app.include_router(
+    posts_router.router, 
+    prefix=f"{settings.API_V1_STR}/posts", 
+    tags=["Posts"]
+)
+
+app.include_router(                                # <<< 2. INCLUIR el nuevo router
+    auth_router.router,
+    prefix=f"{settings.API_V1_STR}/auth",          # URL base para este router: /api/v1/auth
+    tags=["Authentication"]                        # Nueva tag para agrupar en /docs
+)
 
 @app.get("/", tags=["Root"])
 async def root():
