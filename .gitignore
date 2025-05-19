@@ -1,0 +1,14 @@
+.venv/
+/.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.env
+.DS_Store
+get_token.py
+
+# IDE / Editor specific
+.vscode/
+.idea/
