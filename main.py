@@ -18,6 +18,7 @@ origins = [
     "http://localhost:5173",  # Para tu desarrollo local del FE
     "https://socialmediafe.onrender.com",  # La URL de tu FE desplegado
     "https://socialmediabe-3o19.onrender.com" # Tu propio BE
+    "http://192.168.0.97:5173",
     # Puedes añadir más orígenes si es necesario
 ]
 
