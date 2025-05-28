@@ -139,42 +139,51 @@ async def update_content_preferences(
     if not current_user.organization_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
 
+    #print(f"DEBUG_PREFS_PUT: preferences_data (Pydantic model): {preferences_data}") # LOG 1
+
     update_payload = preferences_data.model_dump(exclude_unset=True)
     if "organization_id" in update_payload: del update_payload["organization_id"]
+    
+    #print(f"DEBUG_PREFS_PUT: update_payload (para Supabase upsert): {update_payload}") # LOG 2
+
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se proporcionaron datos para actualizar.")
 
+    # --- INICIO DEL BLOQUE TRY CON LA INDENTACIÓN CORRECTA PARA SUS EXCEPTS ---
     try:
-        response = (
+        #print(f"DEBUG_PREFS_PUT: Realizando upsert para org_id='{str(current_user.organization_id)}'") # LOG 3
+        upsert_response = (
             supabase.table("organization_settings")
             .upsert(
                 {**update_payload, "organization_id": str(current_user.organization_id)},
                 on_conflict="organization_id"
             )
-            .execute() # Upsert y ejecutar
+            .execute()
         )
+        
+        #print(f"DEBUG_PREFS_PUT: Respuesta del upsert: Status={getattr(upsert_response, 'status_code', 'N/A')}, Data={getattr(upsert_response, 'data', 'N/A')}") # LOG 4
 
-        if response.data and isinstance(response.data, list) and len(response.data) > 0:
-            # Necesitamos hacer un SELECT después del upsert para obtener todos los campos
-            # necesarios para ContentPreferencesResponse, ya que upsert solo devuelve los campos que actualizó
-            # o todos si es una inserción (dependiendo de la config de PostgREST).
-            # Para ser seguros, hacemos un select explícito.
+        if upsert_response.data and isinstance(upsert_response.data, list) and len(upsert_response.data) > 0:
+            #print(f"DEBUG_PREFS_PUT: Datos devueltos directamente por upsert: {upsert_response.data[0]}") # LOG 5
+            
+            #print(f"DEBUG_PREFS_PUT: Realizando SELECT explícito para refrescar datos.")
             refreshed_settings_response = (
                 supabase.table("organization_settings")
                 .select("organization_id, prefs_auto_hashtags_enabled, prefs_auto_hashtags_count, prefs_auto_hashtags_strategy, prefs_auto_emojis_enabled, prefs_auto_emojis_style, updated_at")
                 .eq("organization_id", str(current_user.organization_id))
-                .single() # Sabemos que existe después del upsert
+                .single() 
                 .execute()
             )
+
+            #print(f"DEBUG_PREFS_PUT: Datos del SELECT explícito: {getattr(refreshed_settings_response, 'data', 'N/A')}") # LOG 6
+
             if refreshed_settings_response.data:
                 return ContentPreferencesResponse.model_validate(refreshed_settings_response.data)
-            else:
-                # Esto sería muy inesperado
-                print(f"ERROR_ORG_SETTINGS_PUT_PREFS: No se pudo recuperar la configuración después del upsert.")
+            else: # Esto sería muy inesperado si el upsert funcionó y la fila existe
+                #print(f"ERROR_ORG_SETTINGS_PUT_PREFS: No se pudo recuperar la configuración después del upsert con SELECT explícito.")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al confirmar guardado de preferencias.")
-
-        else:
-            print(f"ERROR_ORG_SETTINGS_PUT_PREFS: Upsert de preferencias no devolvió datos. Respuesta: {response}")
+        else: # Upsert no devolvió datos o formato inesperado
+            #print(f"ERROR_ORG_SETTINGS_PUT_PREFS: Upsert de preferencias no devolvió datos o formato inesperado. Respuesta: {upsert_response}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al guardar preferencias: no se obtuvieron datos después del upsert.")
             
     except APIError as e:

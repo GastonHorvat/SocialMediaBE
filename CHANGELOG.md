@@ -1,3 +1,31 @@
+## [No Lanzado] - 2025-05-28
+
+### Added (Añadido)
+
+*   **Gestión de Perfil de Usuario (API):**
+    *   Modelos Pydantic (`ProfileUpdate`, `ProfileResponse`) para la gestión de datos del perfil de usuario.
+    *   Endpoint `GET /api/v1/profiles/me` para obtener el perfil del usuario autenticado.
+    *   Endpoint `PUT /api/v1/profiles/me` para actualizar el perfil del usuario.
+*   **Endpoints para Preferencias de Contenido (API):**
+    *   Modelos Pydantic (`ContentPreferencesUpdate`, `ContentPreferencesResponse`) y endpoints (`GET`, `PUT`) bajo `/api/v1/organization-settings/content-preferences/` para gestionar las preferencias de generación automática de hashtags y emojis.
+
+### Changed (Cambiado)
+
+*   **Consulta de Membresía en `get_current_user` (API):** Se adoptó de forma más definitiva la consulta que usa `.execute()` directamente (con `.order().limit(1)`) en lugar de `.maybe_single()`, para mejorar la estabilidad en la obtención del `organization_id` y evitar errores `204` intermitentes.
+
+### Fixed (Corregido)
+
+*   **Error de Recursión en Política RLS (DB):** Se confirmó que la causa del `APIError code='42P17'` (recursión infinita) residía en las políticas RLS de la tabla `organization_members`. Se recomendó deshabilitar/corregir dichas políticas.
+*   **Errores en el Router de Perfiles (API):**
+    *   Solucionado `TypeError` en la llamada a `supabase.auth.admin.get_user_by_id()` dentro del endpoint `GET /api/v1/profiles/me` al pasar el `user_id` como argumento posicional.
+    *   Corregidos errores de sintaxis (`SyntaxError: unterminated string literal`) y otros errores de Pylance por código mal formateado en `profiles_router.py`.
+*   **Error al Guardar Preferencias de Contenido (API):**
+    *   Solucionado `AttributeError` causado por un campo duplicado (`prefs_auto_hashtags_enabled`) y la omisión del campo `prefs_auto_hashtags_count` en el modelo Pydantic `ContentPreferencesUpdate`. Esto impedía que la cantidad de hashtags se guardara correctamente.
+*   **Errores de Atributo en Operaciones de Escritura de Posts (API):**
+    *   Se refactorizaron los endpoints `create_post`, `update_post_partial` y `soft_delete_post` en `posts_router.py` para usar un patrón de ejecución de escritura robusto con `supabase-py`, eliminando `.select().single()` después de `insert()` o `update()` para evitar `AttributeError`.
+*   **Errores de Importación de `APIError` (API):** Añadida la importación de `postgrest.exceptions.APIError` en los routers donde se usa para el manejo de excepciones.
+*   **Errores de `NameError` en `main.py` (API):** Corregida la importación y registro del `ai_router`.
+
 ## [No Lanzado] - 2025-05-26
 
 Esta sección agrupa el desarrollo inicial, mejoras estructurales y correcciones hasta la fecha.

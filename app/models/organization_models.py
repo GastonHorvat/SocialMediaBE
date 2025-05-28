@@ -32,7 +32,7 @@ class OrganizationSettingsAIResponse(BaseModel):
 
 class ContentPreferencesUpdate(BaseModel):
     prefs_auto_hashtags_enabled: Optional[bool] = Field(None, title="Activar generación automática de hashtags")
-    prefs_auto_hashtags_enabled: Optional[bool] = Field(None, title="Activar generación automática de hashtags")
+    prefs_auto_hashtags_count: Optional[int] = Field(default=None, ge=0, le=15, title="Cantidad preferida de hashtags (0-15)" )
     prefs_auto_hashtags_strategy: Optional[str] = Field(None, title="Estrategia para hashtags", max_length=50)
     prefs_auto_emojis_enabled: Optional[bool] = Field(None, title="Activar generación automática de emojis")
     prefs_auto_emojis_style: Optional[str] = Field(None, title="Estilo de emojis preferido", max_length=50)

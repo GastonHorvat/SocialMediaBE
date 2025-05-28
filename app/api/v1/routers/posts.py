@@ -10,6 +10,8 @@ from app.models.post_models import PostCreate, PostUpdate, PostResponse
 from app.db.supabase_client import get_supabase_client, Client
 from app.api.v1.dependencies.auth import get_current_user, TokenData
 
+from postgrest.exceptions import APIError
+
 class DeletedFilterEnum(str, Enum):
     not_deleted = "not_deleted"
     deleted = "deleted"
@@ -127,23 +129,53 @@ async def create_post(
 
         new_post_dict = post_data.model_dump(exclude_unset=True)
         new_post_dict["author_user_id"] = author_id_str
-        new_post_dict["organization_id"] = str(org_id_uuid) # Seguro porque ya verificamos
+        new_post_dict["organization_id"] = str(org_id_uuid)
 
-        query = supabase.table("posts").insert(new_post_dict).select().single().execute()
+        # --- CORRECCIÓN AQUÍ ---
+        # Paso 1: Insertar el nuevo post
+        # Por defecto, .insert().execute() con Supabase y PostgREST configurado con
+        # "Prefer: return=representation" debería devolver una lista con el registro insertado.
+        insert_response = supabase.table("posts").insert(new_post_dict).execute()
         
-        created_post_data = query.data
-        if not created_post_data:
-            # Esto podría ser un error de base de datos si la inserción falló silenciosamente
+        # Verificar si la inserción fue exitosa y devolvió datos
+        if not insert_response.data or not isinstance(insert_response.data, list) or len(insert_response.data) == 0:
+            print(f"ERROR_POST_CREATE: La inserción del post no devolvió datos. Respuesta: {insert_response}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="No se pudo crear el post o no se obtuvieron los datos del post creado."
             )
-        return PostResponse.model_validate(created_post_data)
+        
+        # El registro insertado debería ser el primer (y único) elemento de la lista .data
+        created_post_data_from_insert = insert_response.data[0]
+        
+        # Validar con PostResponse. Si todos los campos necesarios están presentes
+        # en created_post_data_from_insert (incluyendo 'id', 'created_at', 'updated_at'
+        # que la DB debería generar), esto es suficiente.
+        try:
+            validated_post = PostResponse.model_validate(created_post_data_from_insert)
+            return validated_post
+        except Exception as val_err: # Error de validación Pydantic
+            print(f"ERROR_POST_CREATE: Error al validar datos del post insertado: {val_err}. Datos: {created_post_data_from_insert}")
+            # Si la validación falla, podría ser porque la respuesta del INSERT no tiene todos los campos
+            # que PostResponse espera (ej. si 'updated_at' no se devuelve explícitamente por alguna razón).
+            # En ese caso, un SELECT explícito podría ser necesario si confías más en él.
+            # Por ahora, asumimos que el INSERT devuelve suficiente info.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error al procesar los datos del post creado."
+            )
+        # --- FIN DE LA CORRECCIÓN ---
 
-    except HTTPException as http_exc: # Re-lanzar HTTPExceptions que ya manejamos (como el 400)
+    except HTTPException as http_exc:
         raise http_exc
+    except APIError as e: # Captura errores específicos de PostgREST/Supabase
+        print(f"ERROR_POST_CREATE: APIError creando post para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # O un código más específico si APIError lo provee
+            detail=f"Error de base de datos al crear el post: {e.message}"
+        )
     except Exception as e:
-        print(f"Error creando post para user {author_id_str} en org {org_id_for_log}: {e}")
+        print(f"ERROR_POST_CREATE: Excepción inesperada creando post para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ocurrió un error al crear el post: {str(e)}"
@@ -232,7 +264,7 @@ async def update_post_partial(
             org_id_for_log = str(org_id_uuid)
         else:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, # O 403
+                status_code=status.HTTP_403_FORBIDDEN, 
                 detail=f"No se puede actualizar el post {post_id}: usuario sin organización activa."
             )
 
@@ -243,44 +275,61 @@ async def update_post_partial(
                 detail="No se proporcionaron datos para actualizar."
             )
         
-        # Considerar añadir updated_at si la DB no lo maneja con triggers
-        # update_data_dict["updated_at"] = datetime.now(pytz.utc).isoformat()
+        # updated_at se maneja por trigger en la DB o se podría añadir aquí si no.
 
-        query_builder = (
+        # --- CORRECCIÓN AQUÍ ---
+        update_response = (
             supabase.table("posts")
             .update(update_data_dict)
             .eq("id", str(post_id))
-            .eq("author_user_id", author_id_str)
-            .eq("organization_id", str(org_id_uuid)) # Seguro
-            .is_("deleted_at", None) # No se pueden modificar posts borrados lógicamente
-            .select()
-            .single()
+            .eq("author_user_id", author_id_str) # Asegúrate de usar el nombre correcto de columna
+            .eq("organization_id", str(org_id_uuid))
+            .is_("deleted_at", None) # Solo actualizar si no está borrado lógicamente
+            .execute() # Ejecutar el update
         )
-        
-        response = query_builder.execute()
-        updated_post_data = response.data
 
-        if not updated_post_data:
+        # response.data de un update es una lista de los registros actualizados
+        # si PostgREST está configurado para devolver la representación.
+        # Si no se actualizó nada (porque el .eq no encontró coincidencias), .data será [].
+        if update_response.data and isinstance(update_response.data, list) and len(update_response.data) > 0:
+            updated_post_data_dict = update_response.data[0] # Tomar el primer (y único) registro actualizado
+            
+            # Validar y devolver usando PostResponse
+            return PostResponse.model_validate(updated_post_data_dict)
+        elif not update_response.data or len(update_response.data) == 0 :
+             # Esto significa que la condición .eq() no encontró ninguna fila que actualizar
+             # (o el post ya estaba borrado, o no pertenece al usuario/organización).
+            print(f"WARN_POST_PATCH: No se actualizó ninguna fila para el post {post_id} (usuario: {author_id_str}, org: {org_id_for_log}). Verifique los filtros.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Post con ID {post_id} no encontrado, no pertenece al usuario/organización, o está eliminado."
+                detail=f"Post con ID {post_id} no encontrado, no pertenece al usuario/organización, o está eliminado y no puede ser modificado."
             )
-        return PostResponse.model_validate(updated_post_data)
+        else:
+            # Caso inesperado si .data no es una lista o tiene un formato extraño
+            print(f"ERROR_POST_PATCH: Respuesta inesperada del update para post {post_id}. Respuesta: {update_response}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al procesar la actualización del post.")
 
-    except HTTPException as http_exc:
+    except APIError as e:
+        print(f"ERROR_POST_PATCH: APIError actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
+        # Podrías verificar códigos de error específicos de PostgREST aquí si es necesario
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error de base de datos al intentar actualizar el post: {e.message}"
+        )
+    except HTTPException as http_exc: # Re-lanzar excepciones HTTP que ya hayamos manejado
         raise http_exc
     except Exception as e:
-        print(f"Error actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: {e}")
+        print(f"ERROR_POST_PATCH: Excepción inesperada actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ocurrió un error al actualizar el post: {str(e)}"
+            detail=f"Ocurrió un error al intentar actualizar el post: {str(e)}"
         )
 
 @router.delete(
     "/{post_id}",
     response_model=PostResponse,
     summary="Borrar Lógicamente un Post",
-    description="Marca un post como eliminado (soft delete).",
+    description="Marca un post como eliminado (soft delete), estableciendo 'deleted_at' y actualizando el 'status'.",
     tags=["Posts"]
 )
 async def soft_delete_post(
@@ -300,7 +349,7 @@ async def soft_delete_post(
             org_id_for_log = str(org_id_uuid)
         else:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, # O 403
+                status_code=status.HTTP_403_FORBIDDEN, 
                 detail=f"No se puede eliminar el post {post_id}: usuario sin organización activa."
             )
 
@@ -308,34 +357,51 @@ async def soft_delete_post(
         update_payload = {
             "deleted_at": now_utc.isoformat(),
             "status": "deleted" 
-            # "updated_at": now_utc.isoformat() # Si la DB no lo hace automáticamente
+            # "updated_at" debería ser manejado por el trigger de la DB
         }
 
-        query_builder = (
+        # --- CORRECCIÓN AQUÍ ---
+        # Paso 1: Actualizar el post para marcarlo como borrado
+        update_response = (
             supabase.table("posts")
             .update(update_payload)
             .eq("id", str(post_id))
             .eq("author_user_id", author_id_str)
-            .eq("organization_id", str(org_id_uuid)) # Seguro
+            .eq("organization_id", str(org_id_uuid))
             .is_("deleted_at", None) # Solo borrar si no está ya borrado
-            .select()
-            .single()
+            .execute()
         )
         
-        response = query_builder.execute()
-        deleted_post_data = response.data
-
-        if not deleted_post_data:
+        # response.data de un update es una lista de los registros actualizados
+        # si PostgREST está configurado para devolver la representación.
+        # Si no se actualizó nada (porque no encontró la fila o ya estaba borrada), .data será [].
+        if update_response.data and isinstance(update_response.data, list) and len(update_response.data) > 0:
+            # El post actualizado (ahora con deleted_at y status='deleted')
+            deleted_post_data_dict = update_response.data[0]
+            return PostResponse.model_validate(deleted_post_data_dict)
+        elif not update_response.data or len(update_response.data) == 0:
+            # La condición .eq() o .is_("deleted_at", None) no encontró ninguna fila que actualizar.
+            print(f"WARN_POST_DELETE: No se marcó como borrado el post {post_id} (usuario: {author_id_str}, org: {org_id_for_log}). Verifique si existe, pertenece al usuario/org, o si ya estaba borrado.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Post con ID {post_id} no encontrado, no pertenece al usuario/organización, o ya estaba eliminado."
             )
-        return PostResponse.model_validate(deleted_post_data)
+        else:
+            # Caso inesperado
+            print(f"ERROR_POST_DELETE: Respuesta inesperada del update (soft delete) para post {post_id}. Respuesta: {update_response}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al procesar el borrado del post.")
+        # --- FIN DE LA CORRECCIÓN ---
 
     except HTTPException as http_exc:
         raise http_exc
+    except APIError as e:
+        print(f"ERROR_POST_DELETE: APIError soft-deleting post {post_id} para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Error de base de datos al marcar el post como eliminado: {e.message}"
+        )
     except Exception as e:
-        print(f"Error soft-deleting post {post_id} para user {author_id_str} en org {org_id_for_log}: {e}")
+        print(f"ERROR_POST_DELETE: Excepción inesperada soft-deleting post {post_id} para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ocurrió un error al marcar el post como eliminado: {str(e)}"
