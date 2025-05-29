@@ -247,7 +247,7 @@ async def get_post_by_id(
     tags=["Posts"]
 )
 async def update_post_partial(
-    post_update_data: PostUpdate,
+    post_update_data: PostUpdate, # Modelo Pydantic que recibe los datos del PATCH
     post_id: UUID = Path(..., description="El ID del post a actualizar"),
     current_user: TokenData = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
@@ -263,61 +263,65 @@ async def update_post_partial(
         if org_id_uuid:
             org_id_for_log = str(org_id_uuid)
         else:
+            # Si no hay organización, no se puede determinar a qué post tiene acceso para actualizar.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, 
                 detail=f"No se puede actualizar el post {post_id}: usuario sin organización activa."
             )
 
-        update_data_dict = post_update_data.model_dump(exclude_unset=True)
-        if not update_data_dict:
+        # Convertir el modelo Pydantic a un diccionario.
+        # Usar mode='json' para que Pydantic v2 convierta tipos como datetime a strings ISO.
+        # Usar exclude_unset=True para que solo se incluyan los campos que el cliente envió.
+        payload_for_supabase = post_update_data.model_dump(mode='json', exclude_unset=True)
+        
+        # (Opcional, pero buena práctica) Remover campos que no deberían ser actualizables vía PATCH
+        # aunque tu modelo PostUpdate no debería tenerlos.
+        # if "id" in payload_for_supabase: del payload_for_supabase["id"]
+        # if "author_user_id" in payload_for_supabase: del payload_for_supabase["author_user_id"]
+        # if "organization_id" in payload_for_supabase: del payload_for_supabase["organization_id"]
+        # if "created_at" in payload_for_supabase: del payload_for_supabase["created_at"]
+
+        if not payload_for_supabase: # Si después de exclude_unset, el payload está vacío
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No se proporcionaron datos para actualizar."
             )
         
-        # updated_at se maneja por trigger en la DB o se podría añadir aquí si no.
+        # print(f"DEBUG_POST_PATCH: Payload para Supabase: {payload_for_supabase}") # Para depurar
 
-        # --- CORRECCIÓN AQUÍ ---
+        # Realizar la operación de actualización en la base de datos
         update_response = (
             supabase.table("posts")
-            .update(update_data_dict)
+            .update(payload_for_supabase) # <<<--- USAR LA VARIABLE CORRECTAMENTE DEFINIDA Y PROCESADA
             .eq("id", str(post_id))
-            .eq("author_user_id", author_id_str) # Asegúrate de usar el nombre correcto de columna
+            .eq("author_user_id", author_id_str)
             .eq("organization_id", str(org_id_uuid))
-            .is_("deleted_at", None) # Solo actualizar si no está borrado lógicamente
-            .execute() # Ejecutar el update
+            .is_("deleted_at", None) # Solo permitir actualizar posts no borrados lógicamente
+            .execute()
         )
 
-        # response.data de un update es una lista de los registros actualizados
-        # si PostgREST está configurado para devolver la representación.
-        # Si no se actualizó nada (porque el .eq no encontró coincidencias), .data será [].
+        # Procesar la respuesta del update
         if update_response.data and isinstance(update_response.data, list) and len(update_response.data) > 0:
-            updated_post_data_dict = update_response.data[0] # Tomar el primer (y único) registro actualizado
-            
-            # Validar y devolver usando PostResponse
+            updated_post_data_dict = update_response.data[0]
             return PostResponse.model_validate(updated_post_data_dict)
-        elif not update_response.data or len(update_response.data) == 0 :
-             # Esto significa que la condición .eq() no encontró ninguna fila que actualizar
-             # (o el post ya estaba borrado, o no pertenece al usuario/organización).
-            print(f"WARN_POST_PATCH: No se actualizó ninguna fila para el post {post_id} (usuario: {author_id_str}, org: {org_id_for_log}). Verifique los filtros.")
+        elif not update_response.data or len(update_response.data) == 0:
+            print(f"WARN_POST_PATCH: No se actualizó ninguna fila para el post {post_id} (usuario: {author_id_str}, org: {org_id_for_log}). Verifique los filtros o si el post existe y no está borrado.")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Post con ID {post_id} no encontrado, no pertenece al usuario/organización, o está eliminado y no puede ser modificado."
             )
         else:
-            # Caso inesperado si .data no es una lista o tiene un formato extraño
             print(f"ERROR_POST_PATCH: Respuesta inesperada del update para post {post_id}. Respuesta: {update_response}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al procesar la actualización del post.")
 
     except APIError as e:
-        print(f"ERROR_POST_PATCH: APIError actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
-        # Podrías verificar códigos de error específicos de PostgREST aquí si es necesario
+        print(f"ERROR_POST_PATCH: APIError actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{getattr(e, 'message', str(e))}'")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, # O un código más específico si APIError lo provee
             detail=f"Error de base de datos al intentar actualizar el post: {e.message}"
         )
-    except HTTPException as http_exc: # Re-lanzar excepciones HTTP que ya hayamos manejado
-        raise http_exc
+    except HTTPException as http_exc:
+        raise http_exc # Re-lanzar excepciones HTTP que ya manejamos explícitamente
     except Exception as e:
         print(f"ERROR_POST_PATCH: Excepción inesperada actualizando post {post_id} para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}")
         raise HTTPException(
