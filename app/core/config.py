@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # pero luego tu código debe manejar el caso de None.
     # Para una API key, es mejor que falle si no está.
     GOOGLE_API_KEY: str
+    OPENAI_API_KEY: str 
 
     # Configuración de Pydantic para leer desde .env
     model_config = SettingsConfigDict(

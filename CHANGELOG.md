@@ -1,3 +1,60 @@
+## [No Lanzado] - 2025-05-31
+
+### Added (Añadido)
+
+*   **Servicio Dedicado para Generación de Imágenes con IA (`app/services/ai_image_generator.py`):**
+    *   Función `generate_image_base64_only`: Interactúa con OpenAI (DALL-E) para generar una imagen a partir de un prompt de texto, devolviendo la imagen codificada en Base64.
+    *   Función `generate_image_from_prompt`: Orquesta el flujo completo de generación de imágenes:
+        1.  Llama a `generate_image_base64_only` para obtener los datos de la imagen.
+        2.  Decodifica la imagen Base64.
+        3.  Sube la imagen (como `.png`) a Supabase Storage al bucket `content.flow.media` bajo el path estructurado `{organization_id}/{post_id}.png`. La opción `upsert` está habilitada.
+        4.  Obtiene y devuelve la URL pública de la imagen almacenada.
+    *   Incluye inicialización del cliente AsyncOpenAI y manejo de errores detallado para las interacciones con la API de OpenAI y Supabase Storage.
+*   **Servicio de Generación de Contenido (`app/services/ai_content_generator.py`):**
+    *   Función `build_dalle_prompt_from_post_data`: Construye un prompt de texto optimizado para DALL-E, basándose dinámicamente en el título, un extracto del contenido y la red social de un post existente. Utiliza la nueva plantilla `GENERATE_IMAGE_FOR_SOCIAL_POST_V1`.
+*   **Endpoints de IA para Imágenes (`app/api/v1/routers/ai_router.py`):**
+    *   **`POST /api/v1/ai/generate-image`:**
+        *   Permite a los usuarios generar una imagen a partir de un prompt de texto arbitrario.
+        *   Devuelve la imagen codificada en Base64 (`ImageGenerationResponse`) sin guardarla permanentemente ni asociarla a un post.
+        *   Utiliza el servicio `generate_image_base64_only`.
+    *   **`POST /api/v1/ai/posts/{post_id}/generate-image`:**
+        *   Permite generar una imagen automáticamente para un post existente.
+        *   Recupera los datos del post (`title`, `content_text`, `social_network`).
+        *   Llama a `build_dalle_prompt_from_post_data` para crear el prompt para DALL-E.
+        *   Llama al servicio `generate_image_from_prompt` para generar la imagen, subirla y obtener su URL.
+        *   Actualiza el campo `media_url` del post con la URL de la imagen.
+        *   Devuelve el `PostResponse` del post actualizado.
+*   **Nueva Plantilla de Prompt (`app/prompts/templates.py`):**
+    *   `GENERATE_IMAGE_FOR_SOCIAL_POST_V1`: Plantilla para crear prompts para DALL-E basados en el contenido de un post.
+
+### Changed (Cambiado)
+
+*   **Endpoint `POST /api/v1/ai/posts/{post_id}/generate-image` (API):** Modificado para no requerir un `prompt` en el cuerpo de la solicitud; el prompt para la generación de la imagen ahora se construye automáticamente a partir del contenido del post.
+
+### Fixed (Corregido)
+
+*   **Error de Permisos en Supabase Storage (RLS):** Identificado que la ausencia de políticas RLS en el bucket `content.flow.media` causaba errores `403 new row violates row-level security policy` al intentar subir imágenes. Se recomendó la creación de políticas que otorguen al `service_role` los permisos necesarios para `INSERT`, `UPDATE`, `SELECT`, y `DELETE` en el bucket. *(Acción de configuración en Supabase pendiente por el usuario).*
+*   **Errores de Importación y `TypeError` (API y Servicios):** Resueltos problemas relacionados con nombres de funciones incorrectos en las importaciones y argumentos faltantes en las llamadas a funciones entre el router y los servicios de IA.
+
+## [No Lanzado] - 2025-05-29
+
+### Added (Añadido)
+
+*   **Generación de Contenido para Imagen Única (API):**
+    *   Endpoint `POST /api/v1/ai/generate-single-image-caption` para generar un título y un caption utilizando IA, basados en la configuración de la organización y los inputs del usuario.
+    *   El contenido generado se guarda automáticamente como un nuevo Post en estado `draft`.
+    *   Se implementó la lógica `parse_title_and_caption_from_llm` para extraer el título y el caption de la respuesta estructurada del LLM.
+
+### Fixed (Corregido)
+
+*   **Error de Importación en `ai_router.py` (API):** Solucionado un `ImportError` que impedía importar `create_draft_post_from_ia` desde `app/services/ai_content_generator.py` debido a la ausencia de dicha función en el módulo de servicio. La función fue añadida y los imports correspondientes verificados.
+*   **Error `KeyError` en Formateo de Plantilla de Prompt (Servicio IA):** Corregido un `KeyError` en la plantilla `GENERATE_SINGLE_IMAGE_CAPTION_V1` al escapar correctamente las llaves literales (`{{ }}`) en el texto de ejemplo, evitando que el método `.format()` de Python las interpretara como placeholders no provistos.
+*   **Error 405 Method Not Allowed en Endpoint de IA (API):** Identificado y corregido el uso incorrecto del método HTTP (`GET` en lugar de `POST`) en las pruebas del endpoint `/api/v1/ai/generate-single-image-caption`.
+
+### Changed (Cambiado)
+
+*   **Estructura y Documentación de `ai_content_generator.py` (Servicio IA):** Se reorganizó el archivo en secciones lógicas y se añadió documentación (`docstrings`) a las funciones para mejorar la legibilidad y el mantenimiento.
+
 ## [No Lanzado] - 2025-05-28
 
 ### Added (Añadido)
