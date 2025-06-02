@@ -18,70 +18,75 @@ router = APIRouter()
     tags=["Profiles"]
 )
 async def get_current_user_profile(
-    current_user: TokenData = Depends(get_current_user),
+    current_user: TokenData = Depends(get_current_user), # (1)
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
-    user_id = current_user.user_id
+    user_id = current_user.user_id # (2)
     
     profile_data_from_db: Optional[dict] = None
     user_email: Optional[str] = None
 
     # print(f"INFO_PROFILE_GET: Solicitando perfil para user_id: {user_id}")
 
+    # --- Bloque 1: Obtener datos de la tabla 'profiles' ---
     try:
-        # 1. Obtener datos de la tabla 'profiles'
         profile_response = (
             supabase.table("profiles")
             .select("*")
-            .eq("id", str(user_id))
-            .single() 
+            .eq("id", str(user_id)) # (3)
+            .single() # (4)
             .execute()
         )
         
-        if profile_response.data:
+        if profile_response.data: # (5)
             profile_data_from_db = profile_response.data
-        # else: # No es necesario un else aquí si se maneja APIError PGRST116
-            # print(f"WARN_PROFILE_GET: No se encontró perfil en la tabla 'profiles' para el usuario {user_id}. Se devolverán defaults.")
+        # else: # No es estrictamente necesario un else aquí si PGRST116 se maneja abajo
 
-    except APIError as e:
-        if str(getattr(e, 'code', '')) == 'PGRST116': # "The result contains 0 rows" para single()
-             print(f"WARN_PROFILE_GET: No se encontró perfil único en la tabla 'profiles' para el usuario {user_id} (PGRST116). Se usarán defaults.")
-             profile_data_from_db = None # Asegurar que es None
-        else:
-            print(f"ERROR_PROFILE_GET: APIError al obtener datos de la tabla 'profiles': Code={getattr(e, 'code', 'N/A')}, Msg='{getattr(e, 'message', str(e))}'")
-            # Considera si quieres fallar aquí o intentar obtener el email de todas formas. Por ahora, continuamos.
+    except APIError as e: # (6)
+        # PGRST116: "The result contains 0 rows" (o a veces "more than 1") cuando .single() no encuentra exactamente uno.
+        if str(getattr(e, 'code', '')) == 'PGRST116': 
+             print(f"WARN_PROFILE_GET: No se encontró perfil único en la tabla 'profiles' para el usuario {user_id} (PGRST116). Se usarán defaults/email solo.")
+             profile_data_from_db = None 
+        else: # Otro tipo de APIError de la base de datos
+            print(f"ERROR_PROFILE_GET: APIError al obtener datos de 'profiles': Code={getattr(e, 'code', 'N/A')}, Msg='{getattr(e, 'message', str(e))}'")
+            # Considera si quieres fallar aquí o intentar obtener el email. Por ahora, continuamos.
             profile_data_from_db = None 
-    except Exception as e_profiles:
+    except Exception as e_profiles: # Otras excepciones (ej. de red, timeouts si no son APIError)
         print(f"ERROR_PROFILE_GET: Excepción inesperada al obtener datos de 'profiles': {type(e_profiles).__name__} - {e_profiles}")
-        profile_data_from_db = None
+        profile_data_from_db = None # Asegurar que es None para continuar y devolver lo que se tenga
 
+    # --- Bloque 2: Obtener el email de la tabla 'auth.users' ---
     try:
-        # 2. Obtener el email de la tabla 'auth.users'
-        auth_user_response = supabase.auth.admin.get_user_by_id(str(user_id)) 
+        # print(f"DEBUG_PROFILE_GET: Intentando obtener email para user_id: {user_id}")
+        auth_user_response = supabase.auth.admin.get_user_by_id(str(user_id)) # (7)
         
         if auth_user_response and hasattr(auth_user_response, 'user') and auth_user_response.user:
             user_email = auth_user_response.user.email
+            # print(f"DEBUG_PROFILE_GET: Email obtenido: {user_email}")
         else:
-            print(f"WARN_PROFILE_GET: No se pudo obtener el objeto usuario (y por ende el email) para {user_id} desde auth.users vía admin API.")
+            print(f"WARN_PROFILE_GET: No se pudo obtener el objeto usuario (y por ende el email) para {user_id} desde auth.users vía admin API. Respuesta: {auth_user_response}")
+            # user_email permanecerá None
             
-    except Exception as e_auth:
-        print(f"ERROR_PROFILE_GET: Excepción al obtener datos de auth.users con admin API: {type(e_auth).__name__} - {e_auth}")
-        user_email = None # Asegurar que user_email es None si hay error
+    except APIError as e_auth_api: # Capturar APIError de Supabase Auth
+        print(f"ERROR_PROFILE_GET: APIError al obtener datos de auth.users con admin API: {type(e_auth_api).__name__} - {e_auth_api.message if hasattr(e_auth_api, 'message') else e_auth_api}")
+        user_email = None
+    except Exception as e_auth: # Otras excepciones
+        print(f"ERROR_PROFILE_GET: Excepción genérica al obtener datos de auth.users con admin API: {type(e_auth).__name__} - {e_auth}")
+        user_email = None
 
-    # 3. Construir la respuesta final
-    # Crear un diccionario base para construir ProfileResponse, incluyendo el user_id que siempre tenemos.
-    response_payload = {"id": user_id, "email": user_email}
+    # --- Bloque 3: Construir la respuesta final ---
+    # Crear un diccionario base para construir ProfileResponse
+    response_payload = {"id": user_id, "email": user_email} # (8)
 
-    if profile_data_from_db:
-        # Si tenemos datos de la tabla 'profiles', los fusionamos.
-        # Los campos de profile_data_from_db sobrescribirán los defaults si existen.
+    if profile_data_from_db: # (9)
         response_payload.update(profile_data_from_db)
     
-    # Pydantic usará los defaults de ProfileResponse para campos no presentes en response_payload
     try:
-        return ProfileResponse.model_validate(response_payload)
-    except Exception as val_err: # Error de validación de Pydantic
-        print(f"ERROR_PROFILE_GET: Error al validar ProfileResponse: {val_err}. Payload: {response_payload}")
+        # Pydantic usará los defaults de ProfileResponse para campos no presentes en response_payload
+        # (ej. timezone="UTC" si no vino de la DB)
+        return ProfileResponse.model_validate(response_payload) # (10)
+    except Exception as val_err: 
+        print(f"ERROR_PROFILE_GET: Error al validar ProfileResponse: {val_err}. Payload intentado: {response_payload}")
         raise HTTPException(status_code=500, detail="Error al procesar datos del perfil.")
 
 

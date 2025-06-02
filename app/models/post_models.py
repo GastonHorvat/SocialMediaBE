@@ -1,28 +1,35 @@
 # app/models/post_models.py
 from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List
-from datetime import datetime, date
+from typing import Optional, List # Asegúrate de que List esté si lo usas
+from datetime import datetime, date # date también si lo usas
 from uuid import UUID
 
 class PostBase(BaseModel):
-    title: Optional[str] = None
-    content_text: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=255)
+    content_text: str # Hacerlo requerido en Base si siempre se necesita un texto
     social_network: str
     content_type: str
     media_url: Optional[HttpUrl] = None
-    # organization_id: UUID # Considera si esto debe estar en PostBase o solo en Create/Response
+    status: Optional[str] = 'draft' # Default en Base
+    scheduled_at: Optional[datetime] = None # Default en Base
 
 class PostCreate(PostBase):
-    organization_id: UUID # Asumo que esto es necesario al crear
-    # author_user_id se tomará del usuario autenticado, no se envía en el payload
-    status: Optional[str] = 'draft'
-    scheduled_at: Optional[datetime] = None
+    # organization_id y author_user_id NO ESTÁN AQUÍ.
+    # Se añadirán en el backend antes de la inserción.
+    
+    # Campos adicionales específicos para la creación si los hubiera,
+    # o sobreescrituras de PostBase (ej. si status siempre es 'draft' al crear vía este modelo)
+    # status: str = 'draft' # Podrías forzarlo aquí si es diferente al default de PostBase
+
     prompt_id: Optional[UUID] = None
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
 
+    class Config:
+        from_attributes = True
 
-class PostUpdate(BaseModel): # Para actualizaciones parciales
+
+class PostUpdate(BaseModel):
     title: Optional[str] = None
     content_text: Optional[str] = None
     social_network: Optional[str] = None
@@ -30,28 +37,30 @@ class PostUpdate(BaseModel): # Para actualizaciones parciales
     media_url: Optional[HttpUrl] = None
     status: Optional[str] = None
     scheduled_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None # Permitir actualizar esto si es necesario
+    # published_at: Optional[datetime] = None # Usualmente no se actualiza manualmente así
     prompt_id: Optional[UUID] = None
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
-    # No se debería poder cambiar organization_id o author_user_id con un PATCH simple
-    # deleted_at se maneja por el endpoint DELETE
 
 
 class PostResponse(PostBase):
     id: UUID
-    organization_id: UUID
-    author_user_id: UUID # <<< CAMBIO AQUÍ (antes user_id)
+    organization_id: UUID # Este SÍ debe estar en la respuesta
+    author_user_id: UUID  # Este SÍ debe estar en la respuesta
+    
+    # Sobreescribir status para que sea mandatorio en la respuesta
     status: str
-    scheduled_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None
+    
+    # Timestamps generados por la DB
     created_at: datetime
     updated_at: datetime
+    published_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
+    
+    # Los campos de IA también en la respuesta
     prompt_id: Optional[UUID] = None
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
 
-
     class Config:
-        from_attributes = True # Para Pydantic V2 (reemplaza orm_mode)
+        from_attributes = True

@@ -1,3 +1,26 @@
+## [No Lanzado] - 2025-06-02
+
+### Added (Añadido)
+
+*   **Generación de Títulos para Ideas de Contenido con IA (API):**
+    *   Modelo Pydantic de petición `GenerateTitlesFromFullIdeaRequest` para recibir el texto completo de una idea de contenido, la red social objetivo (opcional) y el número de títulos deseados.
+    *   Modelo Pydantic de respuesta `GeneratedTitlesResponse` para devolver la lista de títulos generados y el texto de la idea original.
+    *   Plantilla de prompt `GENERATE_TITLES_FROM_IDEA_V1` en `app/prompts/templates.py` diseñada para instruir al LLM en la creación de múltiples opciones de títulos.
+    *   Función de servicio `build_prompt_for_titles` en `app/services/ai_content_generator.py` para construir el prompt dinámicamente usando la plantilla, los settings de la organización y la idea de contenido proporcionada.
+    *   Endpoint `POST /api/v1/ai/generate-titles-from-idea` que utiliza el contexto de la organización y el texto de una idea para generar un número configurable de sugerencias de títulos.
+    *   Función de parseo genérica `parse_lines_to_list` (anteriormente `parse_gemini_idea_titles`) en `app/services/ai_content_generator.py` para extraer listas de texto de respuestas del LLM formateadas línea por línea.
+
+### Fixed (Corregido)
+
+*   **Modelo Pydantic `PostCreate` (API):** Se eliminó la declaración del campo `organization_id` como requerido en el modelo `PostCreate`, ya que este valor se obtiene del usuario autenticado y se añade en el backend antes de la inserción en la base de datos. Esto solucionó un `ValidationError` al instanciar `PostCreate` en los endpoints de generación de contenido que crean posts.
+*   **Errores de Importación y Definición de Modelos (API):**
+    *   Corregido `ImportError` por `GeneratedIdeaDetail` no encontrado en `ai_content_generator.py` asegurando su correcta definición en `ai_models.py`.
+    *   Solucionado `NameError` por `GeneratedTitlesResponse` no definido en `ai_router.py` al momento de decorar el endpoint, asegurando el orden de importación/definición.
+    *   Corregido `AttributeError` en `build_prompt_for_titles` por intentar acceder a una constante de plantilla de prompt con un nombre incorrecto.
+    *   Resueltos errores de sintaxis y Pylance por código mal formateado (indentación, paréntesis, strings sin cerrar) en `ai_models.py` y `profiles_router.py`.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-05-31
 
 ### Added (Añadido)
@@ -36,6 +59,8 @@
 *   **Error de Permisos en Supabase Storage (RLS):** Identificado que la ausencia de políticas RLS en el bucket `content.flow.media` causaba errores `403 new row violates row-level security policy` al intentar subir imágenes. Se recomendó la creación de políticas que otorguen al `service_role` los permisos necesarios para `INSERT`, `UPDATE`, `SELECT`, y `DELETE` en el bucket. *(Acción de configuración en Supabase pendiente por el usuario).*
 *   **Errores de Importación y `TypeError` (API y Servicios):** Resueltos problemas relacionados con nombres de funciones incorrectos en las importaciones y argumentos faltantes en las llamadas a funciones entre el router y los servicios de IA.
 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-05-29
 
 ### Added (Añadido)
@@ -54,6 +79,8 @@
 ### Changed (Cambiado)
 
 *   **Estructura y Documentación de `ai_content_generator.py` (Servicio IA):** Se reorganizó el archivo en secciones lógicas y se añadió documentación (`docstrings`) a las funciones para mejorar la legibilidad y el mantenimiento.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ## [No Lanzado] - 2025-05-28
 
@@ -82,6 +109,8 @@
     *   Se refactorizaron los endpoints `create_post`, `update_post_partial` y `soft_delete_post` en `posts_router.py` para usar un patrón de ejecución de escritura robusto con `supabase-py`, eliminando `.select().single()` después de `insert()` o `update()` para evitar `AttributeError`.
 *   **Errores de Importación de `APIError` (API):** Añadida la importación de `postgrest.exceptions.APIError` en los routers donde se usa para el manejo de excepciones.
 *   **Errores de `NameError` en `main.py` (API):** Corregida la importación y registro del `ai_router`.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 ## [No Lanzado] - 2025-05-26
 
