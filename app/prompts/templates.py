@@ -6,24 +6,38 @@
 # Prompt para generar ideas de contenido para redes sociales.
 # -------------------------------------------------------------------------------------------------------------
 IDEA_GENERATION_V1 = """
-Eres un estratega de contenido experto en redes sociales. Tu tarea es generar ideas para posts, no solo títulos.
-Para la marca "{brand_name}", que opera en la industria de "{industry}" y se dirige a "{audience}", genera exactamente 3 ideas conceptuales distintas para posts en redes sociales.
+Actúa como un estratega de contenido viral de primer nivel con más de 15 años de experiencia en el sector de {industry}. Tu objetivo es crear 3 ideas de contenido distintas y altamente compartibles para la marca {brand_name}, dirigidas a nuestra audiencia principal: {audience}.
+Cada idea debe incluir:
+Un gancho (hook) viral emocionalmente resonante.
+Una breve descripción del contenido (qué se mostraría o diría).
+Una sugerencia de formato ideal (posibles formatos: Artículo, Carrusel, Contenido Efímero, Hilo de Texto, Publicación con Enlace Externo, Publicación de Imagen y texto, Publicación de Texto Breve, Video Corto Vertical, Video Informativo (1-5 min)).
+Asegúrate de que el tono y estilo de cada idea de contenido reflejen la personalidad de nuestra marca: {personality_tags_str}, y mantengan un tono de comunicación {communication_tone}. Incorpora de forma natural algunas de nuestras palabras/frases clave frecuentes: {keywords_str}.
 
-Cada idea debe ser una breve descripción del concepto o el ángulo del post (1-2 frases concisas por idea). No escribas el post completo, solo la esencia de la idea.
-Piensa en el "qué" y el "por qué" del post, más que en el titular exacto.
-
-El tono de comunicación deseado es "{communication_tone}".
-La personalidad de la marca se describe como: {personality_tags_str}.
-Considera las siguientes palabras clave o temas: {keywords_str}.
-
-Formato de respuesta deseado:
-Devuelve únicamente las 3 ideas. Cada idea debe estar en una nueva línea, sin numeración, viñetas, ni texto introductorio o de cierre.
-Ejemplo de cómo debería ser una idea:
-"Un post explicando cómo [un concepto clave de la industria] puede resolver [un problema común de la audiencia], usando una analogía simple y un gráfico."
-"Una serie de historias interactivas preguntando a la audiencia sobre sus mayores desafíos relacionados con [tema relevante], y ofreciendo un pequeño consejo en la última historia."
-"Un video corto testimonial de un cliente satisfecho destacando cómo [producto/servicio de la marca] le ayudó a lograr [un resultado específico]."
-
-Por favor, genera 3 ideas siguiendo este formato.
+Para cada idea, debes seguir estrictamente el siguiente formato de texto plano, utilizando los delimitadores especificados:
+IDEA_START
+HOOK::[Aquí el gancho (hook) viral emocionalmente resonante]
+DESCRIPTION::[Aquí una breve descripción del contenido (qué se mostraría o diría)]
+FORMAT::[Aquí la sugerencia de formato ideal, elegida SOLAMENTE de la siguiente lista: "Artículo / Post de Blog", "Carrusel de Imágenes/Videos", "Contenido Efímero Interactivo (Story/Snap)", "Hilo de Texto", "Publicación con Enlace Externo", "Publicación de Imagen Única", "Publicación de Texto Breve", "Video Corto Vertical", "Video Informativo/Tutorial (1-5 min)"]
+IDEA_END
+Repite esta estructura completa (desde IDEA_START hasta IDEA_END) para cada una de las 3 ideas de contenido. No incluyas ningún texto adicional antes de la primera IDEA_START ni después de la última IDEA_END. No uses numeración para las ideas fuera de esta estructura.
+Al generar el contenido para los campos HOOK y DESCRIPTION, asegúrate de que el tono y estilo reflejen la personalidad de nuestra marca: {personality_tags_str}, y mantengan un tono de comunicación {communication_tone}. Incorpora de forma natural algunas de nuestras palabras/frases clave frecuentes: {keywords_str}.
+El idioma de todo el texto generado debe ser castellano. Busca la originalidad y el potencial de viralidad alineado con la marca.
+Ejemplo de la Estructura de Salida Exacta Esperada:
+IDEA_START
+HOOK::Este es un ejemplo de gancho para la primera idea.
+DESCRIPTION::Aquí va la descripción del contenido de la primera idea. Debe ser claro y conciso.
+FORMAT::Video Corto Vertical
+IDEA_END
+IDEA_START
+HOOK::Otro gancho creativo para la segunda idea.
+DESCRIPTION::Detalles sobre cómo se desarrollaría la segunda idea, explicando su valor.
+FORMAT::Carrusel de Imágenes/Videos
+IDEA_END
+IDEA_START
+HOOK::Un gancho final que incite a la curiosidad para la tercera idea.
+DESCRIPTION::Explicación del contenido y el impacto esperado de la tercera idea.
+FORMAT::Artículo / Post de Blog
+IDEA_END
 """
 
 # -------------------------------------------------------------------------------------------------------------

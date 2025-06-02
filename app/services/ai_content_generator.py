@@ -1,10 +1,17 @@
 # app/services/ai_content_generator.py
 import google.generativeai as genai
-from app.core.config import settings # Para la API Key si necesitamos reconfigurar
+import json # Necesario para el parser si el LLM devolviera JSON, pero para delimitado no lo usamos directamente.
 import logging
+import asyncio # Para ejecutar llamadas síncronas en un hilo separado
+
+from typing import List, Dict, Any, Optional
+from app.prompts import templates as prompt_templates
+from app.models.ai_models import GeneratedIdeaDetail
+from app.core.config import settings # Para la API Key si necesitamos reconfigurar
 from typing import Optional, Dict, Any, List  # Asegúrate de tener todas las importaciones necesarias
 from uuid import UUID
-import asyncio # Para ejecutar llamadas síncronas en un hilo separado
+from app.prompts import templates as prompt_templates # Importar al inicio del módulo
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,34 +20,55 @@ logger = logging.getLogger(__name__)
 # (Estas funciones se asume que ya las tienes y funcionan, las incluyo para completitud del módulo si son relevantes aquí)
 
 def build_prompt_for_ideas(org_settings: Dict[str, Any]) -> str:
-    """Construye el prompt para generar ideas de contenido."""
-    # Ejemplo de implementación, ajusta según tus necesidades y plantillas de prompt
-    from app.prompts.templates import IDEA_GENERATION_V1 # Asumiendo que tienes esta plantilla
+    """
+    Construye un prompt para Gemini para generar 3 ideas conceptuales para posts
+    basado en la configuración de la organización, usando una plantilla.
+    """
+    # --- LOG F: VERIFICAR ORG_SETTINGS RECIBIDOS EN EL SERVICIO ---
+    # print(f"DEBUG_BUILD_PROMPT_IDEAS: org_settings recibidos: {org_settings}") # Puedes activar este si es necesario
 
-    # Manejo cuidadoso de valores que podrían ser None o no existir
-    brand_name = org_settings.get('ai_brand_name', 'N/A')
-    industry = org_settings.get('ai_brand_industry', 'N/A')
-    audience = org_settings.get('ai_target_audience', 'N/A')
-    communication_tone = org_settings.get('ai_communication_tone', 'neutral')
+    # Extraer y preparar los valores de org_settings con fallbacks descriptivos
+    # y usando los nombres de campo correctos de tu tabla organization_settings
+    brand_name = org_settings.get('ai_brand_name', 'esta marca/negocio')
+    industry = org_settings.get('ai_brand_industry', 'su industria/nicho')
+    audience = org_settings.get('ai_target_audience_description', 'su audiencia objetivo') # Nombre corregido
     
-    # Para personality_tags y keywords, asegúrate de que sean strings o listas de strings
-    personality_tags = org_settings.get('ai_personality_tags', [])
-    keywords = org_settings.get('ai_keywords', [])
+    # Para personality_tags y keywords, que son TEXT[] en la DB y List[str] en Pydantic/Python
+    personality_tags_list = org_settings.get('ai_brand_personality_tags', []) # Nombre corregido
+    personality_tags_str = ", ".join(tag.strip() for tag in personality_tags_list if isinstance(tag, str) and tag.strip()) if personality_tags_list else "un estilo general y amigable"
+    
+    keywords_list = org_settings.get('ai_keywords_to_use', []) # Nombre corregido
+    keywords_str = ", ".join(keyword.strip() for keyword in keywords_list if isinstance(keyword, str) and keyword.strip()) if keywords_list else "temas de interés general para la audiencia"
 
-    personality_tags_str = ", ".join(personality_tags) if isinstance(personality_tags, list) else str(personality_tags)
-    keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+    communication_tone = org_settings.get('ai_communication_tone', 'un tono neutral y útil')
 
+    try:
+        # Acceder a la plantilla importada
+        prompt_template_string = prompt_templates.IDEA_GENERATION_V1     
+        prompt = prompt_template_string.format(
+            brand_name=brand_name,
+            industry=industry,
+            audience=audience,
+            communication_tone=communication_tone,
+            personality_tags_str=personality_tags_str,
+            keywords_str=keywords_str
+        )
+    except AttributeError:
+        # Esto pasaría si IDEA_GENERATION_V1 no está definido en app.prompts.templates
+        print("ERROR_BUILD_PROMPT_IDEAS: La plantilla 'IDEA_GENERATION_V1' no se encontró en app.prompts.templates.")
+        raise ValueError("Plantilla de prompt para ideas no encontrada.") # O devuelve un prompt por defecto muy genérico
+    except KeyError as e:
+        print(f"ERROR_BUILD_PROMPT_IDEAS: Falta una clave en la plantilla IDEA_GENERATION_V1 o en los datos de formateo: {e}")
+        raise ValueError(f"Error al formatear la plantilla de prompt para ideas: clave {e} faltante.") from e
+    
+    # --- LOG G (Opcional pero útil para depurar el prompt final): ---
+    # print(f"DEBUG_BUILD_PROMPT_IDEAS: Prompt final construido (longitud: {len(prompt)}). Primeros 500 chars:\n{prompt[:500]}")
+    # if len(prompt) > 500:
+    # print("DEBUG_BUILD_PROMPT_IDEAS: ... (prompt continúa) ...")
+    # Para ver el prompt completo si es muy largo:
+    # print(f"DEBUG_BUILD_PROMPT_IDEAS_FULL:\n{prompt}")
 
-    prompt = IDEA_GENERATION_V1.format(
-        brand_name=brand_name,
-        industry=industry,
-        audience=audience,
-        communication_tone=communication_tone,
-        personality_tags_str=personality_tags_str,
-        keywords_str=keywords_str
-    )
-    logger.debug(f"Prompt para ideas construido: {prompt[:200]}...")
-    return prompt
+    return prompt.strip()
 
 def parse_gemini_idea_titles(llm_response: str) -> List[str]:
     """Parsea la respuesta del LLM para extraer los títulos de las ideas."""
@@ -50,6 +78,62 @@ def parse_gemini_idea_titles(llm_response: str) -> List[str]:
     titles = [line.strip() for line in llm_response.splitlines() if line.strip()]
     logger.debug(f"Títulos de ideas parseados: {titles}")
     return titles
+
+def parse_delimited_text_to_ideas(llm_response_text: str) -> List[GeneratedIdeaDetail]:
+    if not llm_response_text or not llm_response_text.strip():
+        print("WARN_PARSE_DELIMITED: Respuesta del LLM vacía o solo espacios.")
+        return []
+
+    parsed_ideas_list: List[GeneratedIdeaDetail] = []
+    current_idea_dict: Dict[str, str] = {} 
+    
+    lines = llm_response_text.splitlines()
+    
+    for line in lines:
+        line = line.strip()
+        if not line: 
+            continue
+
+        if line == "IDEA_START":
+            if current_idea_dict: # Si hay una idea anterior no guardada (ej. sin IDEA_END)
+                try:
+                    # Pasar el diccionario directamente para que Pydantic maneje el alias
+                    idea_obj = GeneratedIdeaDetail.model_validate(current_idea_dict)
+                    parsed_ideas_list.append(idea_obj)
+                except Exception as e_pydantic:
+                    print(f"WARN_PARSE_DELIMITED: Idea parcial no válida (al encontrar nuevo IDEA_START). Error: {e_pydantic}. Parts: {current_idea_dict}")
+            current_idea_dict = {} 
+            continue
+        
+        if line == "IDEA_END":
+            if current_idea_dict: 
+                try:
+                    # Pasar el diccionario directamente
+                    idea_obj = GeneratedIdeaDetail.model_validate(current_idea_dict)
+                    parsed_ideas_list.append(idea_obj)
+                except Exception as e_pydantic:
+                    print(f"WARN_PARSE_DELIMITED: Idea al final de IDEA_END no válida. Error: {e_pydantic}. Parts: {current_idea_dict}")
+            current_idea_dict = {} 
+            continue
+
+        if line.startswith("HOOK::"):
+            current_idea_dict["hook"] = line[len("HOOK::"):].strip()
+        elif line.startswith("DESCRIPTION::"):
+            # Guardar en el dict con la clave que Pydantic espera (el alias "description")
+            current_idea_dict["description"] = line[len("DESCRIPTION::"):].strip() 
+        elif line.startswith("FORMAT::"):
+            current_idea_dict["suggested_format"] = line[len("FORMAT::"):].strip()
+    
+    # Añadir la última idea si el texto no terminó con IDEA_END pero tenía contenido
+    if current_idea_dict: # Si current_idea_dict no está vacío
+        try:
+            # Pasar el diccionario directamente
+            idea_obj = GeneratedIdeaDetail.model_validate(current_idea_dict)
+            parsed_ideas_list.append(idea_obj)
+        except Exception as e_pydantic:
+             print(f"WARN_PARSE_DELIMITED: Última idea (sin IDEA_END explícito) no válida. Error: {e_pydantic}. Parts: {current_idea_dict}")
+
+    return parsed_ideas_list[:3] # Devolver hasta 3 ideas
 
 def build_prompt_for_single_image_caption(org_settings: Dict[str, Any], request_data: Any) -> str:
     """Construye el prompt para generar caption de imagen única."""

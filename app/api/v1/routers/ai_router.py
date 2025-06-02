@@ -1,17 +1,18 @@
 # app/api/v1/routers/ai_router.py
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Path 
-from pydantic import BaseModel
+from pydantic import BaseModel # No parece usarse directamente aquí, pero es común en modelos
 from typing import List, Dict, Any, Optional
 from uuid import UUID
-import logging
+import logging # Usas logger, así que lo mantengo
 
 from app.db.supabase_client import get_supabase_client, Client as SupabaseClient
 from app.api.v1.dependencies.auth import get_current_user, TokenData
-from app.core.config import settings
+# from app.core.config import settings # No se usa directamente si la inicialización de IA es en startup
 
 # Modelos de IA y Posts
 from app.models.ai_models import (
-    ContentIdeaResponse,
+    ContentIdeasResponse, # Cambiado de ContentIdeaResponse para el nuevo formato
+    GeneratedIdeaDetail,  # Nuevo modelo para la estructura de una idea
     GenerateSingleImageCaptionRequest,
     ImageGenerationRequest, 
     ImageGenerationResponse 
@@ -20,41 +21,33 @@ from app.models.post_models import PostResponse, PostCreate
 
 # Servicios de IA
 from app.services.ai_content_generator import (
-    # ... (tus imports de ai_content_generator) ...
     build_prompt_for_ideas,
     generate_text_with_gemini,
-    parse_gemini_idea_titles,
+    parse_delimited_text_to_ideas, # ASUMIENDO QUE ESTA ES LA NUEVA FUNCIÓN DE PARSEO PARA IDEAS
     build_prompt_for_single_image_caption,
     parse_title_and_caption_from_llm,
-    create_draft_post_from_ia
+    create_draft_post_from_ia,
+    build_dalle_prompt_from_post_data # Para la imagen automática del post
 )
-from app.services.ai_content_generator import build_dalle_prompt_from_post_data 
-
-# --- CAMBIO EN LA IMPORTACIÓN ---
 from app.services.ai_image_generator import (
-    generate_image_from_prompt, # Esta es la que genera, sube y devuelve URL
-    generate_image_base64_only  # Esta es la nueva que solo devuelve base64
+    generate_image_from_prompt, # Genera, sube y devuelve URL
+    generate_image_base64_only  # Solo devuelve base64
 )
-# --- FIN DEL CAMBIO ---
 
 from postgrest.exceptions import APIError
 
-
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # Correcto
 
 
 # --- FUNCIÓN HELPER ---
 async def get_organization_settings(
     organization_id: UUID,
     supabase: SupabaseClient
-) -> Dict[str, Any]:
+) -> Dict[str, Any]: # Esta función se ve bien
     if not organization_id:
-        # Este caso debería ser manejado por el llamador (ej. current_user.organization_id es None)
-        # pero una comprobación aquí es una defensa adicional.
         logger.warning("get_organization_settings fue llamado sin organization_id.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de organización no proporcionado para obtener la configuración.")
-
     try:
         response = supabase.table("organization_settings").select("*").eq("organization_id", str(organization_id)).maybe_single().execute()
         if not response.data:
@@ -74,35 +67,59 @@ async def get_organization_settings(
 # --- ENDPOINTS DE GENERACIÓN DE TEXTO ---
 @router.post(
     "/content-ideas",
-    response_model=ContentIdeaResponse,
-    summary="Generar Ideas de Contenido con IA",
-    description="Genera 3 ideas/títulos conceptuales para posts basadas en la configuración de la organización.",
-    tags=["AI Content Generation - Text"]
+    response_model=ContentIdeasResponse, # Usar el nuevo modelo de respuesta
+    summary="Generar Ideas de Contenido Detalladas con IA",
+    description="Genera 3 ideas conceptuales para posts (con gancho, descripción y formato) basadas en la configuración de la organización.",
+    tags=["AI Content Generation - Ideas"]
 )
-async def generate_content_ideas_endpoint( # Renombrado para evitar colisión si se usa el mismo nombre
+async def generate_content_ideas_endpoint(
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     if not current_user.organization_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa para generar ideas.")
     
-    org_settings = await get_organization_settings(current_user.organization_id, supabase)
+    org_settings: Dict[str, Any] # Declarar tipo para claridad
+    try:
+        # logger.debug(f"DEBUG_IDEAS_EP: Obteniendo settings para organization_id='{current_user.organization_id}'")
+        org_settings = await get_organization_settings(current_user.organization_id, supabase)
+        # logger.debug(f"DEBUG_IDEAS_EP: Org settings obtenidos: {org_settings}")
+    except HTTPException as e:
+        raise e # Re-lanzar HTTPExceptions de get_organization_settings
+    # No es necesario capturar APIError/Exception aquí de nuevo si get_organization_settings ya las convierte a HTTPException
 
+    # Validar que los settings necesarios para el prompt estén presentes
     if not org_settings.get('ai_brand_name') or not org_settings.get('ai_brand_industry'):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La configuración de IA (nombre de marca, industria) debe estar completa.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La configuración de IA de la organización (nombre de marca, industria) debe estar completa para generar ideas.")
 
-    prompt = build_prompt_for_ideas(org_settings)
+    # --- El código desde aquí está DENTRO del scope donde org_settings está definido ---
+    prompt = build_prompt_for_ideas(org_settings) 
+    
+    # logger.debug(f"DEBUG_IDEAS_EP: Prompt generado para LLM (longitud: {len(prompt)} chars). Primeros 500 chars:\n{prompt[:500]}")
+    # if len(prompt) > 500:
+    #      logger.debug(f"DEBUG_IDEAS_EP: ... (prompt continúa) ...")
+
+    llm_response_text: str = ""
     try:
         llm_response_text = await generate_text_with_gemini(prompt)
+        # logger.debug(f"DEBUG_IDEAS_EP: Respuesta cruda del LLM (longitud: {len(llm_response_text)} chars):\n{llm_response_text}")
     except RuntimeError as e_gemini:
         logger.error(f"RuntimeError desde LLM para ideas: {e_gemini}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e_gemini))
+    except Exception as e_llm:
+        logger.error(f"Excepción inesperada llamando al LLM para ideas: {e_llm}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error inesperado al generar ideas con IA.")
     
-    idea_titles = parse_gemini_idea_titles(llm_response_text)
-    if not idea_titles:
-        logger.warning(f"LLM no devolvió títulos esperados para ideas. Raw: '{llm_response_text}'")
+    # Usar la función de parseo para el formato de texto delimitado
+    parsed_ideas: List[GeneratedIdeaDetail] = parse_delimited_text_to_ideas(llm_response_text)
+    
+    # logger.debug(f"DEBUG_IDEAS_EP: Ideas parseadas (objetos GeneratedIdeaDetail): {parsed_ideas}")
+
+    if not parsed_ideas: # Si la lista está vacía después del parseo
+        logger.warning(f"LLM no devolvió ideas válidas o el parseo falló para ideas. Raw: '{llm_response_text}'")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="La IA no pudo generar ideas o la respuesta fue inválida.")
-    return ContentIdeaResponse(titles=idea_titles)
+            
+    return ContentIdeasResponse(ideas=parsed_ideas)
 
 
 @router.post(
@@ -147,7 +164,6 @@ async def generate_caption_and_save_post_endpoint( # Renombrado
         content_text=generated_caption.strip(),
         social_network=request_data.target_social_network,
         content_type="image", # Asume que es para una imagen
-        organization_id=current_user.organization_id
     )
     try:
         newly_created_post_data = await create_draft_post_from_ia(
