@@ -11,13 +11,81 @@ from app.core.config import settings # Para la API Key si necesitamos reconfigur
 from typing import Optional, Dict, Any, List  # Asegúrate de tener todas las importaciones necesarias
 from uuid import UUID
 from app.prompts import templates as prompt_templates # Importar al inicio del módulo
-
+from app.models.ai_models import GeneratedIdeaDetail, GenerateTitlesFromFullIdeaRequest
 
 logger = logging.getLogger(__name__)
 
 
-# --- Funciones relacionadas con la construcción de prompts ---
-# (Estas funciones se asume que ya las tienes y funcionan, las incluyo para completitud del módulo si son relevantes aquí)
+# --- NUEVA FUNCIÓN PARA CONSTRUIR PROMPT DE TÍTULOS ---
+def build_prompt_for_titles(
+    org_settings: Dict[str, Any],
+    request_data: GenerateTitlesFromFullIdeaRequest # Usamos el nuevo modelo de petición
+) -> str:
+    """
+    Construye un prompt para Gemini para generar títulos basados en una idea de contenido completa
+    y la configuración de la organización.
+    """
+    # print(f"DEBUG_BUILD_TITLES_PROMPT: org_settings: {org_settings}")
+    # print(f"DEBUG_BUILD_TITLES_PROMPT: request_data: {request_data}")
+
+    # Extraer datos de org_settings con fallbacks
+    brand_name = org_settings.get('ai_brand_name', 'esta marca')
+    industry = org_settings.get('ai_brand_industry', 'su industria general')
+    audience = org_settings.get('ai_target_audience_description', 'su audiencia')
+    communication_tone = org_settings.get('ai_communication_tone', 'un tono efectivo')
+    
+    personality_tags_list = org_settings.get('ai_brand_personality_tags', [])
+    personality_tags_str = ", ".join(tag.strip() for tag in personality_tags_list if isinstance(tag, str) and tag.strip()) if personality_tags_list else "general"
+    
+    keywords_list = org_settings.get('ai_keywords_to_use', [])
+    keywords_str = ", ".join(keyword.strip() for keyword in keywords_list if isinstance(keyword, str) and keyword.strip()) if keywords_list else "temas relevantes"
+
+    # Extraer datos de request_data
+    full_content_idea_text = request_data.full_content_idea_text
+    
+    # Manejar target_social_network opcional
+    target_social_network_context = request_data.target_social_network if request_data.target_social_network else "múltiples redes sociales"
+    
+    number_of_titles_to_generate = request_data.number_of_titles # Ya tiene default 3 en el modelo Pydantic
+
+    try:
+        prompt_template_string = prompt_templates.GENERATE_TITLES_FROM_IDEA_V1
+        
+        prompt = prompt_template_string.format(
+            industry=industry,
+            brand_name=brand_name,
+            audience=audience,
+            communication_tone=communication_tone,
+            personality_tags_str=personality_tags_str,
+            keywords_str=keywords_str,
+            full_content_idea_text=full_content_idea_text,
+            target_social_network_context=target_social_network_context,
+            number_of_titles=number_of_titles_to_generate
+        )
+    except AttributeError:
+        print("ERROR_BUILD_TITLES_PROMPT: La plantilla 'GENERATE_TITLES_FROM_IDEA_V1' no se encontró.")
+        raise ValueError("Plantilla de prompt para títulos no encontrada.")
+    except KeyError as e:
+        print(f"ERROR_BUILD_TITLES_PROMPT: Falta una clave en la plantilla o datos de formateo: {e}")
+        raise ValueError(f"Error al formatear la plantilla de prompt para títulos: clave {e} faltante.")
+    
+    # print(f"DEBUG_BUILD_TITLES_PROMPT: Prompt final (primeros 300):\n{prompt[:300]}...")
+    return prompt.strip()
+
+# --- FIN NUEVA FUNCIÓN ---
+
+def parse_lines_to_list(llm_response_text: str, max_items: Optional[int] = None) -> List[str]:
+    """
+    Parsea una respuesta de texto del LLM que contiene items uno por línea.
+    """
+    if not llm_response_text or not llm_response_text.strip():
+        return []
+    
+    items = [item.strip() for item in llm_response_text.splitlines() if item.strip()]
+    
+    if max_items is not None:
+        return items[:max_items]
+    return items
 
 def build_prompt_for_ideas(org_settings: Dict[str, Any]) -> str:
     """

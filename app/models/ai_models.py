@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import Optional, List, Dict
 
 # -------------------------------------------------------------------------------------------------------------
-# Modelos para la Generación de IDEAS DE CONTENIDO
+# Modelos para la Generación de IDEAS Y TITULOS DE CONTENIDO
 # -------------------------------------------------------------------------------------------------------------
 
 class GeneratedIdeaDetail(BaseModel):
@@ -23,6 +23,59 @@ class ContentIdeasResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# --- NUEVOS MODELOS PARA GENERACIÓN DE TÍTULOS ---
+
+class GenerateTitlesFromFullIdeaRequest(BaseModel):
+    """Petición para generar títulos basados en el texto completo de una idea de contenido."""
+    full_content_idea_text: str = Field(
+        ..., # Mandatorio
+        min_length=20,
+        description="El texto completo de la idea de contenido (puede incluir el hook, la descripción y el formato sugerido) para la cual se generarán títulos."
+    )
+    target_social_network: Optional[str] = Field(
+        None, 
+        description="Opcional: Red social específica para la que se desean los títulos (ej. 'Twitter', 'LinkedIn').",
+        examples=["Twitter", "Blog Post"]
+    )
+    number_of_titles: int = Field( # Lo hacemos mandatorio con default para que siempre sepamos cuántos pedir
+        default=3, 
+        ge=1,
+        le=5, # Un límite razonable para sugerencias de títulos
+        description="Número de títulos diferentes a generar."
+    )
+
+    class Config:
+        from_attributes = True
+        # Para Pydantic v1.x (json_schema_extra)
+        # json_schema_extra = {
+        #     "example": {
+        #         "full_content_idea_text": "HOOK::¿Cansado de que la burocracia te coma el tiempo?...\nDESCRIPTION::Un video corto y dinámico que muestra cómo la automatización IA transforma problemas...\nFORMAT::Video Corto Vertical",
+        #         "target_social_network": "Instagram",
+        #         "number_of_titles": 3
+        #     }
+        # }
+        # Para Pydantic v2.x (model_config con json_schema_extra)
+        model_config = {
+            "json_schema_extra": {
+                "examples": [{
+                    "full_content_idea_text": "HOOK::¿Cansado de que la burocracia te coma el tiempo?...\nDESCRIPTION::Un video corto y dinámico que muestra cómo la automatización IA transforma problemas...\nFORMAT::Video Corto Vertical",
+                    "target_social_network": "Instagram",
+                    "number_of_titles": 3
+                }]
+            }
+        }
+
+
+class GeneratedTitlesResponse(BaseModel):
+    """Respuesta del endpoint que devuelve una lista de títulos generados."""
+    titles: List[str]
+    original_full_idea_text: str # Devolver el texto completo de la idea para referencia
+
+    class Config:
+        from_attributes = True
+
+# --- FIN NUEVOS MODELOS ---
 
 
 # -------------------------------------------------------------------------------------------------------------

@@ -39,6 +39,38 @@ DESCRIPTION::Explicación del contenido y el impacto esperado de la tercera idea
 FORMAT::Artículo / Post de Blog
 IDEA_END
 """
+# -------------------------------------------------------------------------------------------------------------
+# Prompt para sugerir TÍTULOS a partir de una idea de contenido completa.
+# -------------------------------------------------------------------------------------------------------------
+
+GENERATE_TITLES_FROM_IDEA_V1 = """
+Eres un copywriter experto y creativo, especializado en crear títulos magnéticos para contenido de redes sociales para la industria de {industry}.
+La marca es "{brand_name}" y se dirige a la siguiente audiencia: {audience}.
+El tono de comunicación general de la marca es {communication_tone} y su personalidad se describe como: {personality_tags_str}.
+Las palabras/frases clave importantes para la marca son: {keywords_str}.
+
+Basándote en la siguiente IDEA DE CONTENIDO COMPLETA que te proporciono:
+--- INICIO IDEA DE CONTENIDO ---
+{full_content_idea_text}
+--- FIN IDEA DE CONTENIDO ---
+
+Considera también que estos títulos podrían ser para la red social: {target_social_network_context}.
+
+TAREA: Genera exactamente {number_of_titles} opciones de títulos atractivos, concisos y optimizados para el engagement para esta idea de contenido. 
+Los títulos deben capturar la esencia de la idea y ser apropiados para el tono y la personalidad de la marca.
+
+INSTRUCCIONES CRÍTICAS PARA LA SALIDA:
+1.  Devuelve únicamente los {number_of_titles} títulos.
+2.  Cada título debe estar en una nueva línea.
+3.  NO incluyas numeración, viñetas, comillas alrededor de cada título, ni ningún texto introductorio o de cierre. Solo los títulos, uno por línea.
+
+Ejemplo de cómo debe ser la salida si se piden 3 títulos:
+Este es un Título Atractivo Ejemplo 1
+Otro Título Muy Bueno Ejemplo 2
+Un Título Final Impactante Ejemplo 3
+
+Genera los {number_of_titles} títulos.
+"""
 
 # -------------------------------------------------------------------------------------------------------------
 # Prompt para generar el TÍTULO y CAPTION para una publicación de imagen única.
