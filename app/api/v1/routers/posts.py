@@ -1,14 +1,27 @@
 # app/api/v1/routers/posts.py
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
 from uuid import UUID
-from datetime import date, datetime
+from datetime import date, datetime # Quitar date si no se usa
 from enum import Enum
 import pytz
+import uuid as uuid_pkg # Para generar UUIDs para nombres de archivo
 
-from app.models.post_models import PostCreate, PostUpdate, PostResponse
-from app.db.supabase_client import get_supabase_client, Client
+from app.models.post_models import ( # Importar nuevos modelos
+    PostCreate, PostUpdate, PostResponse,
+    GeneratePreviewImageRequest, GeneratePreviewImageResponse,
+    ConfirmWIPImageDetails
+)
+from app.db.supabase_client import get_supabase_client, SupabaseClient # Renombrar Client a SupabaseClient
 from app.api.v1.dependencies.auth import get_current_user, TokenData
+
+# NUEVAS IMPORTACIONES DE SERVICIOS
+from app.services import storage_service
+from app.services import ai_image_generator # Asumiendo que tu servicio se llama así
+
+# --- CONFIGURACIÓN DEL LOGGER (ASEGÚRATE DE TENERLA) ---
+import logging
+logger = logging.getLogger(__name__)
 
 from postgrest.exceptions import APIError
 
@@ -42,7 +55,7 @@ async def get_posts(
                     "'all' (todos)."
     ),
     current_user: TokenData = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     print(f"DEBUG get_posts: current_user.user_id='{current_user.user_id}', current_user.organization_id='{current_user.organization_id}', current_user.role='{current_user.role}'") # Añade esto
     author_id_str: Optional[str] = None
@@ -109,7 +122,7 @@ async def get_posts(
 async def create_post(
     post_data: PostCreate,
     current_user: TokenData = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     author_id_str: Optional[str] = None
     org_id_uuid: Optional[UUID] = None
@@ -191,7 +204,7 @@ async def create_post(
 async def get_post_by_id(
     post_id: UUID = Path(..., description="El ID del post a recuperar"),
     current_user: TokenData = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     author_id_str: Optional[str] = None
     org_id_uuid: Optional[UUID] = None
@@ -250,7 +263,7 @@ async def update_post_partial(
     post_update_data: PostUpdate, # Modelo Pydantic que recibe los datos del PATCH
     post_id: UUID = Path(..., description="El ID del post a actualizar"),
     current_user: TokenData = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     author_id_str: Optional[str] = None
     org_id_uuid: Optional[UUID] = None
@@ -339,7 +352,7 @@ async def update_post_partial(
 async def soft_delete_post(
     post_id: UUID = Path(..., description="El ID del post a marcar como eliminado"),
     current_user: TokenData = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ):
     author_id_str: Optional[str] = None
     org_id_uuid: Optional[UUID] = None
@@ -410,3 +423,382 @@ async def soft_delete_post(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ocurrió un error al marcar el post como eliminado: {str(e)}"
         )
+    
+# ================================================================================
+# SECCIÓN: NUEVOS ENDPOINTS PARA GESTIÓN DE IMÁGENES DE PREVISUALIZACIÓN (WIP)
+# Estos endpoints se añaden a tu router existente.
+# ================================================================================
+
+@router.post(
+    "/{post_id}/generate-preview-image",
+    response_model=GeneratePreviewImageResponse,
+    summary="Generar Imagen de Previsualización con IA para WIP",
+    description="Genera una imagen usando IA basada en el contenido del post o un prompt customizado. "
+                "Limpia la carpeta 'wip' del post y guarda la nueva imagen allí.",
+    tags=["Posts - Image Management"] # Nueva tag para agrupar
+)
+async def generate_ia_preview_image_for_wip(
+    post_id: UUID = Path(..., description="ID del post para el cual generar la preview."),
+    *, # <--- MARCADOR DE SOLO-KEYWORD ARGUMENTS
+    request_data: GeneratePreviewImageRequest, # FastAPI lo tomará del cuerpo
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
+
+    # 1. Obtener el post para verificar pertenencia y obtener contenido para prompt si es necesario
+    try:
+        post_res = await supabase.table("posts").select("id, title, content_text, organization_id").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).maybe_single().execute()
+        if not post_res.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o no pertenece a la organización.")
+        post_db_data = post_res.data
+    except APIError as e:
+        logger.error(f"DB Error obteniendo post {post_id} para generar preview IA: {e.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al acceder a datos del post.")
+    
+    # 2. Determinar el prompt para la IA
+    prompt_text = request_data.custom_prompt
+    if not prompt_text:
+        prompt_text_title = post_db_data.get("title", "")
+        prompt_text_content = post_db_data.get("content_text", "")[:200] # Primeros 200 chars
+        
+        if prompt_text_title and len(prompt_text_title.strip()) >= 5:
+            prompt_text = f"Una imagen para un post titulado: '{prompt_text_title}'. Contenido adicional: '{prompt_text_content}'"
+        elif prompt_text_content and len(prompt_text_content.strip()) >= 10:
+            prompt_text = f"Una imagen relacionada con el siguiente contenido: '{prompt_text_content}'"
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudo generar un prompt adecuado desde el post. Proporcione un prompt customizado o más contenido en el post.")
+    
+    logger.info(f"Generando imagen IA para WIP (post {post_id}) con prompt: '{prompt_text[:100]}...'")
+
+    # 3. Limpiar la carpeta /wip/ del post ANTES de generar la nueva imagen
+    wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
+    cleanup_success, cleanup_error = await storage_service.delete_all_files_in_folder(
+        supabase_client=supabase,
+        bucket_name=storage_service.POST_PREVIEWS_BUCKET,
+        folder_path=wip_folder_path
+    )
+    if not cleanup_success:
+        # Loguear el error pero continuar; la subida a WIP usará upsert.
+        logger.warning(f"Fallo al limpiar carpeta WIP '{wip_folder_path}' para post {post_id} antes de generar nueva preview IA: {cleanup_error}")
+
+    # 4. Llamar al servicio de IA para generar y subir la imagen a WIP
+    # Esta función ahora devuelve: (public_wip_url, wip_storage_path, wip_extension, wip_content_type, error_message)
+    public_url, storage_path, extension, content_type, ai_upload_error = await ai_image_generator.generate_and_upload_ai_image_to_wip(
+        prompt_text=prompt_text,
+        organization_id=current_user.organization_id,
+        post_id=post_id,
+        supabase_client=supabase
+    )
+
+    if ai_upload_error or not public_url or not storage_path or not extension or not content_type:
+        logger.error(f"Error en generate_and_upload_ai_image_to_wip para post {post_id}: {ai_upload_error}")
+        # Determinar un código de status más específico si es posible desde el error
+        status_code_err = status.HTTP_502_BAD_GATEWAY
+        if ai_upload_error and ("bloqueado" in ai_upload_error.lower() or "política de contenido" in ai_upload_error.lower()):
+            status_code_err = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code_err, detail=f"Error al generar o guardar imagen de previsualización: {ai_upload_error or 'Datos de imagen inválidos.'}")
+
+    return GeneratePreviewImageResponse(
+        preview_image_url=public_url,
+        preview_storage_path=storage_path,
+        preview_image_extension=extension,
+        preview_content_type=content_type
+    )
+
+@router.post(
+    "/{post_id}/prepare-wip-for-user-upload",
+    status_code=status.HTTP_204_NO_CONTENT, # Éxito sin contenido
+    summary="Preparar Carpeta de Trabajo (WIP) para Subida de Usuario",
+    description="Limpia la carpeta 'wip' del post para que el frontend pueda subir de forma segura una nueva imagen de previsualización de usuario.",
+    tags=["Posts - Image Management"]
+)
+async def prepare_wip_folder_for_user_upload(
+    post_id: UUID = Path(..., description="ID del post cuya carpeta 'wip' se limpiará."),
+    *, # <--- MARCADOR
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
+
+    # Verificar que el post pertenece a la organización del usuario (seguridad)
+    try:
+        post_check_res = await supabase.table("posts").select("id").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).maybe_single().execute()
+        if not post_check_res.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o no pertenece a la organización.")
+    except APIError as e:
+        logger.error(f"DB Error verificando post {post_id} para limpiar WIP: {e.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al verificar datos del post.")
+
+    # Limpiar la carpeta /wip/
+    wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
+    success, error_msg = await storage_service.delete_all_files_in_folder(
+        supabase_client=supabase,
+        bucket_name=storage_service.POST_PREVIEWS_BUCKET,
+        folder_path=wip_folder_path
+    )
+
+    if not success:
+        logger.error(f"Fallo al limpiar carpeta WIP '{wip_folder_path}' para post {post_id} (solicitud de usuario): {error_msg}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"No se pudo limpiar el área de previsualización: {error_msg}")
+    
+    # HTTP 204 No Content se devuelve automáticamente si no hay return explícito y el status_code es 204
+    return
+
+
+# ================================================================================
+# SECCIÓN: MODIFICACIÓN DEL ENDPOINT PATCH PARA MANEJO DE IMÁGENES
+# Esta es tu función `update_post_partial` existente, con la lógica de imágenes integrada.
+# ================================================================================
+@router.patch(
+    "/{post_id}", 
+    response_model=PostResponse,
+    summary="Actualizar Parcialmente un Post (con manejo de imágenes)",
+    description="Actualiza campos de un post. Permite confirmar una imagen de 'wip' como principal, "
+                "borrar la imagen principal actual, o solo actualizar textos (descartando cualquier imagen en 'wip').",
+    tags=["Posts"]
+)
+async def update_post_partial( # La línea que Pylance marcó como 563
+    post_id: UUID = Path(..., description="El ID del post a actualizar"),
+    *, # <--- MARCADOR
+    post_update_data: PostUpdate, # FastAPI lo tomará del cuerpo
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
+
+    # Validación de payload: no se puede confirmar WIP y borrar/cambiar media principal al mismo tiempo
+    # en la misma solicitud si `media_url` o `media_storage_path` se envían explícitamente
+    # para una operación diferente a la confirmación de WIP.
+    has_confirm_wip = post_update_data.confirm_wip_image_details is not None
+    is_deleting_media_explicitly = post_update_data.media_url is None and post_update_data.media_storage_path is None # Esto indica borrado
+    is_setting_new_media_directly = (post_update_data.media_url is not None or post_update_data.media_storage_path is not None) and not is_deleting_media_explicitly
+
+    if has_confirm_wip and (is_deleting_media_explicitly or is_setting_new_media_directly):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No se puede confirmar una imagen de previsualización y simultáneamente borrar o establecer una nueva imagen principal directamente. Realice estas operaciones por separado."
+        )
+
+    # 1. Obtener el post actual de la DB
+    try:
+        # Usar .single() para asegurar que el post existe y pertenece al usuario/org, o falla.
+        # Seleccionamos todos los campos porque los necesitaremos para la respuesta y para old_media_storage_path.
+        current_post_res = await supabase.table("posts").select("*").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).is_("deleted_at", None).single().execute()
+        # .single() lanzará un error si no hay exactamente una fila (ej. PostgrestAPIError con code PGRST116)
+    except APIError as e:
+        if hasattr(e, 'code') and "PGRST116" in e.code: # PostgREST code for "Fetched zero rows" or "Fetched more than one row"
+            logger.warning(f"Post {post_id} no encontrado o no único para org {current_user.organization_id} en PATCH: {e.message}")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado, no pertenece a la organización o ha sido eliminado.")
+        logger.error(f"DB Error obteniendo post {post_id} para actualizar: {e.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al obtener datos del post para actualizar.")
+    
+    current_post_db_data = current_post_res.data # Esto es un dict
+    old_media_storage_path = current_post_db_data.get("media_storage_path")
+
+    # --- Preparar datos para la actualización y limpieza ---
+    # Usamos model_dump con exclude_unset=True para solo incluir campos enviados por el cliente.
+    # exclude_none=True también es útil si un campo opcional se envía como None y eso tiene un significado.
+    db_update_payload: Dict[str, any] = post_update_data.model_dump(exclude_unset=True, exclude_none=False)
+    
+    # Remover 'confirm_wip_image_details' del payload principal de DB ya que se maneja por separado.
+    if 'confirm_wip_image_details' in db_update_payload:
+        del db_update_payload['confirm_wip_image_details']
+    
+    # Si media_url o media_storage_path se envían como None, significa borrar.
+    # Pydantic con exclude_none=False los mantendrá si son None.
+    # Si no se envían (exclude_unset=True los quita), no se tocarán en la DB
+    # a menos que la lógica de confirm_wip_image_details los modifique.
+
+    final_storage_paths_to_delete_post_db: List[Tuple[str, str]] = [] # (bucket_name, path_in_bucket)
+    wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
+    
+    moved_wip_image_final_path: Optional[str] = None # Para rollback de storage si DB falla
+
+    # --- Lógica de Imágenes ---
+    if post_update_data.confirm_wip_image_details:
+        wip_details = post_update_data.confirm_wip_image_details
+        logger.info(f"Confirmando imagen WIP para post {post_id}: path='{wip_details.path}', ext='{wip_details.extension}'")
+
+        # Validar que el path en wip_details sea el esperado (seguridad adicional)
+        expected_wip_storage_path = storage_service.get_wip_image_storage_path(
+            current_user.organization_id, post_id, wip_details.extension
+        )
+        if wip_details.path != expected_wip_storage_path:
+            logger.error(f"Path de WIP proporcionado '{wip_details.path}' no coincide con el esperado '{expected_wip_storage_path}' para post {post_id}.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El path de la imagen de previsualización a confirmar es incorrecto.")
+
+        unique_final_filename = f"{uuid_pkg.uuid4()}.{wip_details.extension}"
+        destination_final_media_path = storage_service.get_post_media_storage_path(
+            current_user.organization_id, post_id, unique_final_filename
+        )
+
+        # Mover el archivo de WIP (post_previews) a la ubicación final (post_media)
+        moved_path, move_error = await storage_service.move_file_in_storage(
+            supabase_client=supabase,
+            source_bucket=storage_service.POST_PREVIEWS_BUCKET,
+            source_path_in_bucket=wip_details.path, # El path completo desde el payload
+            destination_bucket=storage_service.POST_MEDIA_BUCKET,
+            destination_path_in_bucket=destination_final_media_path,
+            content_type_for_destination=wip_details.content_type # Propagado desde el FE/IA
+        )
+
+        if move_error or not moved_path:
+            logger.error(f"Error moviendo imagen de WIP a Media para post {post_id}: {move_error}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"No se pudo confirmar la imagen de previsualización debido a un error de almacenamiento: {move_error}")
+        
+        moved_wip_image_final_path = moved_path # Guardar para posible rollback
+
+        # Actualizar el payload de la DB con la nueva imagen principal
+        db_update_payload["media_url"] = storage_service._build_public_url(supabase, storage_service.POST_MEDIA_BUCKET, moved_path, add_timestamp_bust=False)
+        db_update_payload["media_storage_path"] = moved_path # Solo el path dentro del bucket
+
+        # Si había una imagen principal antigua, programar su borrado
+        if old_media_storage_path and old_media_storage_path != moved_path:
+            logger.info(f"Programando borrado de imagen principal antigua: {storage_service.POST_MEDIA_BUCKET}/{old_media_storage_path}")
+            final_storage_paths_to_delete_post_db.append((storage_service.POST_MEDIA_BUCKET, old_media_storage_path))
+        
+        # La carpeta WIP queda vacía porque el archivo se MOVIÓ (asumiendo que move_file_in_storage borra el origen)
+        # No es necesario añadir explícitamente la limpieza de wip_folder_path aquí.
+
+    elif post_update_data.media_url is None and 'media_url' in post_update_data.model_fields_set: # Si se envió explícitamente media_url: null
+        logger.info(f"Solicitud para borrar imagen principal del post {post_id}.")
+        db_update_payload["media_url"] = None
+        db_update_payload["media_storage_path"] = None # Asegurar que ambos se limpien
+        if old_media_storage_path:
+            logger.info(f"Programando borrado de imagen principal existente: {storage_service.POST_MEDIA_BUCKET}/{old_media_storage_path}")
+            final_storage_paths_to_delete_post_db.append((storage_service.POST_MEDIA_BUCKET, old_media_storage_path))
+        
+        # Si se borra la imagen principal, también se descarta cualquier imagen en WIP
+        # Esta limpieza de WIP se hará al final si no se confirmó una imagen WIP.
+    
+    # --- Actualizar la Base de Datos ---
+    # Solo actualizar si hay cambios en el payload o si se realizó una operación de imagen
+    # que requiere actualizar media_url/media_storage_path (que ya estarían en db_update_payload)
+    if not db_update_payload and not post_update_data.confirm_wip_image_details and not ('media_url' in post_update_data.model_fields_set and post_update_data.media_url is None):
+        logger.info(f"PATCH para post {post_id} sin cambios detectados en la DB (textos o imagen principal). Solo se limpiará WIP si aplica.")
+        # En este caso, la respuesta será el post sin modificar, pero WIP se limpiará después.
+        updated_post_from_db = current_post_db_data # Usar los datos que ya teníamos
+    else:
+        # Asegurar que 'updated_at' se actualice si no hay un trigger de DB
+        # db_update_payload["updated_at"] = datetime.now(pytz.utc) # Descomentar si es necesario
+        logger.info(f"Actualizando post {post_id} en DB con payload: {db_update_payload}")
+        try:
+            update_res = await supabase.table("posts").update(db_update_payload).eq("id", str(post_id)).execute()
+            
+            # supabase-py v2 .execute() para update devuelve una PostgrestAPIResponse
+            # con .data siendo una lista de los registros actualizados.
+            if not update_res.data or len(update_res.data) == 0:
+                # Esto podría pasar si el post fue borrado entre el GET y el PATCH, o RLS lo impidió.
+                logger.error(f"Fallo al actualizar post {post_id}, no se devolvieron datos. ¿El post aún existe y es accesible?")
+                # Podríamos intentar re-obtener el post para ver su estado actual.
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El post no pudo ser actualizado o ya no existe.")
+            updated_post_from_db = update_res.data[0]
+            logger.info(f"Post {post_id} actualizado exitosamente en DB.")
+
+        except APIError as e_db_update:
+            logger.error(f"DB Error actualizando post {post_id}: {e_db_update.message}", exc_info=True)
+            # ROLLBACK DE STORAGE si una imagen de WIP se movió a MEDIA pero la DB falló
+            if moved_wip_image_final_path:
+                logger.warning(f"DB update falló para post {post_id}. Intentando rollback de storage: Borrar {moved_wip_image_final_path} de {storage_service.POST_MEDIA_BUCKET}")
+                # Esta es una operación de "mejor esfuerzo". Si falla, se logueará.
+                await storage_service.delete_files_from_storage(supabase, storage_service.POST_MEDIA_BUCKET, [moved_wip_image_final_path])
+                # La imagen original en WIP ya no existe (se movió). El usuario tendría que reintentar la preview.
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error al guardar cambios en el post: {e_db_update.message}")
+
+    # --- Ejecutar Limpieza de Storage Post-Actualización Exitosa de DB ---
+    # 1. Borrar imagen principal antigua si fue reemplazada o eliminada
+    for bucket, path_to_delete in final_storage_paths_to_delete_post_db:
+        logger.info(f"Ejecutando borrado programado de storage: {bucket}/{path_to_delete}")
+        delete_results = await storage_service.delete_files_from_storage(supabase, bucket, [path_to_delete])
+        for _path, success, err_msg in delete_results:
+            if not success:
+                # Loguear error, pero no hacer fallar la respuesta al usuario ya que la DB está OK.
+                logger.error(f"Fallo en limpieza de storage post-DB: No se pudo borrar {bucket}/{_path}. Error: {err_msg}")
+
+    # 2. Limpiar la carpeta WIP si NO se confirmó una imagen desde ella
+    if not post_update_data.confirm_wip_image_details:
+        logger.info(f"Limpiando carpeta WIP para post {post_id} ya que no se confirmó ninguna imagen de allí.")
+        _success_wip, _err_wip = await storage_service.delete_all_files_in_folder(
+            supabase, storage_service.POST_PREVIEWS_BUCKET, wip_folder_path
+        )
+        if not _success_wip:
+            logger.error(f"Fallo al limpiar carpeta WIP {wip_folder_path} para post {post_id} después de actualizar post: {_err_wip}")
+            # No hacer fallar la respuesta al usuario.
+
+    # Devolver el post con los datos actualizados
+    return PostResponse.model_validate(updated_post_from_db)
+
+
+# ================================================================================
+# Endpoint SOFT DELETE - Considerar limpieza de imágenes aquí
+# ================================================================================
+@router.delete(
+    "/{post_id}",
+    response_model=PostResponse, # O un modelo simple de éxito/confirmación
+    summary="Borrar Lógicamente un Post (y limpiar sus imágenes)",
+    # ... (resto de tu decoración de endpoint)
+)
+async def soft_delete_post(
+    post_id: UUID = Path(..., description="El ID del post a marcar como eliminado"),
+    *, # <--- MARCADOR (Buena práctica añadirlo aquí también)
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    # --- TU LÓGICA ACTUAL PARA OBTENER EL POST Y VALIDAR ---
+    # (Asegúrate de obtener `organization_id` y `media_storage_path` del post)
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
+
+    try:
+        post_to_delete_res = await supabase.table("posts").select("id, organization_id, media_storage_path").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).is_("deleted_at", None).single().execute()
+    except APIError as e:
+        if hasattr(e, 'code') and "PGRST116" in e.code:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado, no pertenece a la organización o ya fue eliminado.")
+        logger.error(f"DB Error obteniendo post {post_id} para soft-delete: {e.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al obtener datos del post para eliminar.")
+    
+    post_data_for_delete = post_to_delete_res.data
+    org_id_of_post = UUID(post_data_for_delete["organization_id"]) # Convertir a UUID si es necesario
+    media_storage_path_to_delete = post_data_for_delete.get("media_storage_path")
+
+    # --- TU LÓGICA ACTUAL PARA MARCAR EL POST COMO BORRADO EN DB ---
+    now_utc = datetime.now(pytz.utc)
+    update_payload = { "deleted_at": now_utc.isoformat(), "status": "deleted" }
+    try:
+        delete_update_res = await supabase.table("posts").update(update_payload).eq("id", str(post_id)).execute()
+        if not delete_update_res.data:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Fallo al marcar el post como eliminado en DB.")
+        deleted_post_data = delete_update_res.data[0]
+    except APIError as e_db_delete:
+        logger.error(f"DB Error en soft-delete para post {post_id}: {e_db_delete.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error de base de datos al marcar el post como eliminado: {e_db_delete.message}")
+
+    # --- NUEVO: Limpieza de Imágenes Post-Soft-Delete Exitoso ---
+    logger.info(f"Post {post_id} marcado como eliminado. Procediendo a limpiar imágenes asociadas.")
+    
+    # 1. Limpiar imagen principal de post_media
+    if media_storage_path_to_delete:
+        logger.info(f"Intentando borrar imagen principal {media_storage_path_to_delete} de {storage_service.POST_MEDIA_BUCKET} para post eliminado {post_id}.")
+        delete_main_results = await storage_service.delete_files_from_storage(
+            supabase, storage_service.POST_MEDIA_BUCKET, [media_storage_path_to_delete]
+        )
+        for _path, success, err_msg in delete_main_results:
+            if not success:
+                logger.error(f"Fallo al borrar imagen principal {storage_service.POST_MEDIA_BUCKET}/{_path} del post eliminado {post_id}: {err_msg}")
+                # No hacer fallar la operación de soft-delete por esto, solo loguear.
+
+    # 2. Limpiar carpeta WIP de post_previews
+    wip_folder_to_delete = storage_service.get_wip_folder_path(org_id_of_post, post_id)
+    logger.info(f"Intentando limpiar carpeta WIP {wip_folder_to_delete} de {storage_service.POST_PREVIEWS_BUCKET} para post eliminado {post_id}.")
+    _success_wip_del, _err_wip_del = await storage_service.delete_all_files_in_folder(
+        supabase, storage_service.POST_PREVIEWS_BUCKET, wip_folder_to_delete
+    )
+    if not _success_wip_del:
+        logger.error(f"Fallo al limpiar carpeta WIP {wip_folder_to_delete} del post eliminado {post_id}: {_err_wip_del}")
+        # No hacer fallar la operación de soft-delete.
+
+    return PostResponse.model_validate(deleted_post_data)

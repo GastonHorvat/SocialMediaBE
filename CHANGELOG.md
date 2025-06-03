@@ -1,5 +1,47 @@
 # CHANGELOG BE
 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## [No Lanzado] - 2025-06-03
+
+### ✨ Nuevas Características (Features)
+
+*   **Gestión Avanzada de Imágenes para Posts (Flujo WIP):** Se ha implementado un sistema completo para manejar la imagen principal de los posts, incluyendo la generación por IA y la subida por el usuario, con un flujo de previsualización "Work In Progress" (WIP).
+    *   Los usuarios ahora pueden generar una imagen de previsualización mediante IA para un post existente. Esta imagen se almacena temporalmente en una carpeta `/wip/` dentro del bucket `post_previews`.
+    *   Los usuarios pueden subir su propia imagen de previsualización, que también se gestiona a través de la carpeta `/wip/`, reemplazando cualquier previsualización anterior.
+    *   Al guardar un post, los usuarios pueden confirmar la imagen de la carpeta `/wip/` para que se convierta en la imagen principal del post. Esto implica mover la imagen al bucket `post_media` y actualizar las referencias del post.
+    *   Si un post se guarda sin confirmar la imagen en `/wip/`, dicha imagen de previsualización se descarta automáticamente.
+    *   Se permite eliminar la imagen principal de un post, lo que también limpia cualquier previsualización en `/wip/`.
+    *   El proceso de creación de posts sigue un flujo de dos pasos: primero se crea el post con texto, y luego el frontend sube la imagen directamente a la ubicación final en `post_media` y actualiza el post mediante un `PATCH`.
+    *   **Nuevos Endpoints en `posts.py`:**
+        *   `POST /api/v1/posts/{post_id}/generate-preview-image`: Para generar una imagen IA y colocarla en `/wip/`.
+        *   `POST /api/v1/posts/{post_id}/prepare-wip-for-user-upload`: Para limpiar la carpeta `/wip/` antes de que el usuario suba su propia previsualización.
+    *   **Mejoras en `PATCH /api/v1/posts/{post_id}`:** Lógica robusta para confirmar imágenes desde `/wip/`, borrar la imagen principal, y limpiar la carpeta `/wip/` según corresponda. Incluye compensación de storage si la actualización de la base de datos falla después de una operación de imagen.
+    *   **Mejoras en `DELETE /api/v1/posts/{post_id}` (Soft Delete):** Ahora también limpia la imagen principal asociada en `post_media` y cualquier imagen en la carpeta `/wip/` del post.
+
+### 🛠 Mejoras y Cambios Técnicos (Improvements & Changes)
+
+*   **Servicio de Storage (`storage_service.py`):** Se ha creado un nuevo servicio dedicado para todas las interacciones con Supabase Storage (subir, mover, listar, borrar archivos y carpetas), utilizando las capacidades `async` de `supabase-py` v2.x.
+*   **Servicio de Generación de Imágenes IA (`ai_image_generator.py`):**
+    *   Se añadió la función `generate_and_upload_ai_image_to_wip` para el nuevo flujo de previsualización.
+    *   Se modificó la función `generate_image_from_prompt` (usada por `ai_router.py`) para que devuelva el `storage_path` de la imagen final y utilice una estructura de path más robusta y única en `post_media`.
+    *   Los parámetros de configuración de la IA para imágenes (modelo, tamaño, calidad) ahora se leen desde `app/core/config.py` (`settings`), permitiendo una gestión centralizada.
+*   **Modelos Pydantic (`post_models.py`):**
+    *   Actualizados a la sintaxis de Pydantic V2.
+    *   Nuevos modelos (`ConfirmWIPImageDetails`, `GeneratePreviewImageRequest`, `GeneratePreviewImageResponse`) para soportar el nuevo flujo.
+    *   `PostUpdate` y `PostResponse` actualizados para incluir campos relacionados con la gestión de imágenes (`confirm_wip_image_details`, `media_storage_path`, `content_type` para imágenes).
+*   **Campo `media_storage_path` en DB:** Se añadió el campo `media_storage_path` a la tabla `posts` para almacenar la ruta interna de la imagen principal en Supabase Storage, mejorando la robustez en operaciones de borrado y actualización.
+*   **Refinamiento de Rutas de Storage:**
+    *   Imágenes finales en: `post_media/{org_id}/posts/{post_id}/images/{uuid}.{ext}`.
+    *   Imágenes de previsualización en: `post_previews/{org_id}/posts/{post_id}/wip/preview_active.{ext}`.
+
+### ⚠️ Notas (Notes)
+
+*   El endpoint `POST /api/v1/ai/posts/{post_id}/generate-image` (en `ai_router.py`) sigue generando y asignando una imagen principal directamente al post, pero ahora guarda también el `media_storage_path`. Se considera una refactorización futura para integrarlo completamente con el flujo `/wip/` si se desea una consistencia total.
+*   Se recomienda revisar y asegurar una gestión consistente de entornos virtuales para el proyecto.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-06-02
 
 ### Added (Añadido)

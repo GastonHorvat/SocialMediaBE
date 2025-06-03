@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Optional, Dict, Any # Asegúrate de que Optional, Dict y Any estén aquí
 from uuid import UUID
 
-from app.db.supabase_client import get_supabase_client, Client as SupabaseClient
+from app.db.supabase_client import get_supabase_client, SupabaseClient
 from app.api.v1.dependencies.auth import get_current_user, TokenData
 from app.models.profile_models import ProfileUpdate, ProfileResponse # Ajusta la ruta si es necesario
 from postgrest.exceptions import APIError

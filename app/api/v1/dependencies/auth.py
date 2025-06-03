@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List # Asegúrate de que List esté importado
 
 from app.core.config import settings
-from app.db.supabase_client import get_supabase_client, Client
+from app.db.supabase_client import get_supabase_client, SupabaseClient 
 from postgrest.exceptions import APIError
 
 oauth2_scheme = HTTPBearer()
@@ -19,7 +19,7 @@ class TokenData(BaseModel):
 
 async def get_current_user(
     token: HTTPAuthorizationCredentials = Depends(oauth2_scheme),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: SupabaseClient = Depends(get_supabase_client)
 ) -> TokenData:
     
     credentials_exception = HTTPException(

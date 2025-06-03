@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 from uuid import UUID
 import logging # Usas logger, así que lo mantengo
 
-from app.db.supabase_client import get_supabase_client, Client as SupabaseClient
+from app.db.supabase_client import get_supabase_client, SupabaseClient
 from app.api.v1.dependencies.auth import get_current_user, TokenData
 # from app.core.config import settings # No se usa directamente si la inicialización de IA es en startup
 
@@ -310,7 +310,7 @@ async def generate_auto_image_for_post_endpoint( # Renombrado para reflejar que 
     )
 
     # 3. Llamar al servicio que genera la imagen con DALL-E, la sube y devuelve la URL
-    public_image_url, error_msg = await generate_image_from_prompt(
+    public_image_url, storage_path_final, error_msg = await generate_image_from_prompt(
         prompt_text=dalle_prompt, # <--- USANDO EL PROMPT CONSTRUIDO
         organization_id=current_user.organization_id,
         post_id=post_id,

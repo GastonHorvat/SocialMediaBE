@@ -1,6 +1,8 @@
 # app/db/supabase_client.py
-from supabase import create_client, Client
+from supabase import create_client, Client as LibSupabaseClient
 from app.core.config import settings
+
+SupabaseClient = LibSupabaseClient 
 
 # Inicializar el cliente de Supabase una vez
 # Si settings.SUPABASE_URL o settings.SUPABASE_KEY están vacíos, create_client fallará.
@@ -8,9 +10,9 @@ from app.core.config import settings
 if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
     raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env file or environment variables")
 
-supabase_client: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+supabase_client: SupabaseClient = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
-def get_supabase_client() -> Client:
+def get_supabase_client() -> SupabaseClient:
     """
     Dependencia para obtener el cliente de Supabase.
     En el futuro, podría manejar un pool de conexiones o configuraciones más avanzadas.
