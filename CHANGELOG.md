@@ -1,3 +1,5 @@
+# CHANGELOG BE
+
 ## [No Lanzado] - 2025-06-02
 
 ### Added (Añadido)

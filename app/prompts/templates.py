@@ -10,7 +10,17 @@ Actúa como un estratega de contenido viral de primer nivel con más de 15 años
 Cada idea debe incluir:
 Un gancho (hook) viral emocionalmente resonante.
 Una breve descripción del contenido (qué se mostraría o diría).
-Una sugerencia de formato ideal (posibles formatos: Artículo, Carrusel, Contenido Efímero, Hilo de Texto, Publicación con Enlace Externo, Publicación de Imagen y texto, Publicación de Texto Breve, Video Corto Vertical, Video Informativo (1-5 min)).
+Una sugerencia de formato elegido SOLAMENTE de la siguiente lista: 
+- Artículo
+- Carrusel
+- Contenido Efímero
+- Hilo
+- Publicación con Enlace Externo
+- Publicación de Imagen Única
+- Publicación de Texto Breve
+- Video Corto Vertical
+- Video Informativo (1-5 min)).
+
 Asegúrate de que el tono y estilo de cada idea de contenido reflejen la personalidad de nuestra marca: {personality_tags_str}, y mantengan un tono de comunicación {communication_tone}. Incorpora de forma natural algunas de nuestras palabras/frases clave frecuentes: {keywords_str}.
 
 Para cada idea, debes seguir estrictamente el siguiente formato de texto plano, utilizando los delimitadores especificados:
@@ -26,17 +36,17 @@ Ejemplo de la Estructura de Salida Exacta Esperada:
 IDEA_START
 HOOK::Este es un ejemplo de gancho para la primera idea.
 DESCRIPTION::Aquí va la descripción del contenido de la primera idea. Debe ser claro y conciso.
-FORMAT::Video Corto Vertical
+FORMAT::formato sugerido (elige uno de los formatos mencionados)
 IDEA_END
 IDEA_START
 HOOK::Otro gancho creativo para la segunda idea.
 DESCRIPTION::Detalles sobre cómo se desarrollaría la segunda idea, explicando su valor.
-FORMAT::Carrusel de Imágenes/Videos
+FORMAT::formato sugerido (elige uno de los formatos mencionados)
 IDEA_END
 IDEA_START
 HOOK::Un gancho final que incite a la curiosidad para la tercera idea.
 DESCRIPTION::Explicación del contenido y el impacto esperado de la tercera idea.
-FORMAT::Artículo / Post de Blog
+FORMAT::formato sugerido (elige uno de los formatos mencionados)
 IDEA_END
 """
 # -------------------------------------------------------------------------------------------------------------
@@ -44,32 +54,39 @@ IDEA_END
 # -------------------------------------------------------------------------------------------------------------
 
 GENERATE_TITLES_FROM_IDEA_V1 = """
-Eres un copywriter experto y creativo, especializado en crear títulos magnéticos para contenido de redes sociales para la industria de {industry}.
-La marca es "{brand_name}" y se dirige a la siguiente audiencia: {audience}.
-El tono de comunicación general de la marca es {communication_tone} y su personalidad se describe como: {personality_tags_str}.
-Las palabras/frases clave importantes para la marca son: {keywords_str}.
+"Eres un copywriter experto y un estratega de contenido digital con un profundo entendimiento de cómo crear títulos que no solo capturan la atención sino que también reflejan con precisión el núcleo de una idea de contenido. Tu especialidad es la industria de {industry}.
+La marca para la que trabajas es "{brand_name}".
+Nuestra audiencia objetivo es: {audience}.
+La personalidad de la marca es: {personality_tags_str}.
+El tono de comunicación que debemos mantener es: {communication_tone}.
+Palabras/frases clave importantes a considerar (si aplican naturalmente): {keywords_str}.
 
-Basándote en la siguiente IDEA DE CONTENIDO COMPLETA que te proporciono:
---- INICIO IDEA DE CONTENIDO ---
+Tu TAREA PRINCIPAL:
+A partir de la siguiente IDEA DE CONTENIDO COMPLETA, que incluye un gancho, una descripción y un formato sugerido:
+--- INICIO IDEA DE CONTENIDO COMPLETA ---
 {full_content_idea_text}
---- FIN IDEA DE CONTENIDO ---
+--- FIN IDEA DE CONTENIDO COMPLETA ---
 
-Considera también que estos títulos podrían ser para la red social: {target_social_network_context}.
+Considera que estos títulos podrían ser utilizados principalmente para la red social: {target_social_network_context}.
 
-TAREA: Genera exactamente {number_of_titles} opciones de títulos atractivos, concisos y optimizados para el engagement para esta idea de contenido. 
-Los títulos deben capturar la esencia de la idea y ser apropiados para el tono y la personalidad de la marca.
+Debes generar exactamente {number_of_titles} opciones de títulos. Cada título debe:
+- Ser directamente relevante y derivado de la ESENCIA y los DETALLES CLAVE de la {full_content_idea_text} proporcionada. No te desvíes a temas generales si la idea es específica.
+- Funcionar como un gancho atractivo y magnético que incite a la audiencia a consumir el contenido completo.
+- Ser conciso y optimizado para el engagement en redes sociales.
+- Ser completamente coherente con el tono de comunicación ({communication_tone}) y la personalidad de la marca ({personality_tags_str}).
+- Si es posible y suena natural, integrar alguna de las palabras clave ({keywords_str}).
 
-INSTRUCCIONES CRÍTICAS PARA LA SALIDA:
-1.  Devuelve únicamente los {number_of_titles} títulos.
-2.  Cada título debe estar en una nueva línea.
-3.  NO incluyas numeración, viñetas, comillas alrededor de cada título, ni ningún texto introductorio o de cierre. Solo los títulos, uno por línea.
+INSTRUCCIONES CRÍTICAS PARA EL FORMATO DE SALIDA:
+- Tu respuesta debe contener ÚNICAMENTE los {number_of_titles} títulos generados.
+- Cada título debe estar en una línea separada.
+- ABSOLUTAMENTE NINGÚN texto introductorio, numeración, viñetas, guiones, comillas alrededor de cada título, o cualquier otro texto de cierre. Solo los títulos, uno por línea, listos para ser copiados.
 
-Ejemplo de cómo debe ser la salida si se piden 3 títulos:
-Este es un Título Atractivo Ejemplo 1
-Otro Título Muy Bueno Ejemplo 2
-Un Título Final Impactante Ejemplo 3
+Ejemplo de cómo debe ser la salida si se piden 3 títulos (y la idea fuera sobre 'recetas veganas fáciles'):
+- Recetas Veganas que Amarás en Minutos
+- Transforma tu Cocina: Vegano Fácil y Delicioso
+- ¡Descubre el Sabor Vegano Sin Complicaciones!
 
-Genera los {number_of_titles} títulos.
+Ahora, basándote en la {full_content_idea_text} y todas las directrices, genera los {number_of_titles} títulos."
 """
 
 # -------------------------------------------------------------------------------------------------------------
