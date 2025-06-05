@@ -7,87 +7,115 @@ from app.db.supabase_client import get_supabase_client, SupabaseClient
 from app.api.v1.dependencies.auth import get_current_user, TokenData
 from app.models.profile_models import ProfileUpdate, ProfileResponse # Ajusta la ruta si es necesario
 from postgrest.exceptions import APIError
-
+import logging
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get(
     "/me",
-    response_model=ProfileResponse,
-    summary="Obtener Perfil del Usuario Actual",
-    description="Recupera el perfil del usuario autenticado, incluyendo su email de auth.users.",
+    response_model=ProfileResponse, # Usar el modelo actualizado
+    summary="Obtener Perfil del Usuario Actual con Detalles de Organización",
+    description="Recupera el perfil del usuario autenticado, incluyendo su email, ID de organización y rol en la organización.",
     tags=["Profiles"]
 )
 async def get_current_user_profile(
-    current_user: TokenData = Depends(get_current_user), # (1)
+    current_user: TokenData = Depends(get_current_user), # TokenData ya tiene user_id, org_id, role
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
-    user_id = current_user.user_id # (2)
+    user_id = current_user.user_id
     
     profile_data_from_db: Optional[dict] = None
-    user_email: Optional[str] = None
+    user_email_from_auth: Optional[str] = None # Renombrado para claridad
 
-    # print(f"INFO_PROFILE_GET: Solicitando perfil para user_id: {user_id}")
+    logger.info(f"PROFILE_ME - Solicitando perfil para user_id: {user_id}, org_id: {current_user.organization_id}, role: {current_user.role}")
 
     # --- Bloque 1: Obtener datos de la tabla 'profiles' ---
     try:
+        # SIN await (asumiendo comportamiento síncrono de .execute() en tu entorno)
         profile_response = (
             supabase.table("profiles")
-            .select("*")
-            .eq("id", str(user_id)) # (3)
-            .single() # (4)
+            .select("full_name, avatar_url, timezone, created_at, updated_at") # Seleccionar solo los campos de 'profiles'
+            .eq("id", str(user_id))
+            .single() # .single() es síncrono
             .execute()
         )
         
-        if profile_response.data: # (5)
+        if profile_response.data:
             profile_data_from_db = profile_response.data
-        # else: # No es estrictamente necesario un else aquí si PGRST116 se maneja abajo
+            logger.debug(f"PROFILE_ME - Datos de 'profiles' obtenidos para {user_id}: {profile_data_from_db}")
+        # else: # No se encontró perfil en 'profiles', profile_data_from_db permanecerá None
 
-    except APIError as e: # (6)
-        # PGRST116: "The result contains 0 rows" (o a veces "more than 1") cuando .single() no encuentra exactamente uno.
+    except APIError as e:
         if str(getattr(e, 'code', '')) == 'PGRST116': 
-             print(f"WARN_PROFILE_GET: No se encontró perfil único en la tabla 'profiles' para el usuario {user_id} (PGRST116). Se usarán defaults/email solo.")
+             logger.warning(f"PROFILE_ME - No se encontró perfil único en 'profiles' para {user_id} (PGRST116).")
              profile_data_from_db = None 
-        else: # Otro tipo de APIError de la base de datos
-            print(f"ERROR_PROFILE_GET: APIError al obtener datos de 'profiles': Code={getattr(e, 'code', 'N/A')}, Msg='{getattr(e, 'message', str(e))}'")
-            # Considera si quieres fallar aquí o intentar obtener el email. Por ahora, continuamos.
-            profile_data_from_db = None 
-    except Exception as e_profiles: # Otras excepciones (ej. de red, timeouts si no son APIError)
-        print(f"ERROR_PROFILE_GET: Excepción inesperada al obtener datos de 'profiles': {type(e_profiles).__name__} - {e_profiles}")
-        profile_data_from_db = None # Asegurar que es None para continuar y devolver lo que se tenga
-
-    # --- Bloque 2: Obtener el email de la tabla 'auth.users' ---
-    try:
-        # print(f"DEBUG_PROFILE_GET: Intentando obtener email para user_id: {user_id}")
-        auth_user_response = supabase.auth.admin.get_user_by_id(str(user_id)) # (7)
-        
-        if auth_user_response and hasattr(auth_user_response, 'user') and auth_user_response.user:
-            user_email = auth_user_response.user.email
-            # print(f"DEBUG_PROFILE_GET: Email obtenido: {user_email}")
         else:
-            print(f"WARN_PROFILE_GET: No se pudo obtener el objeto usuario (y por ende el email) para {user_id} desde auth.users vía admin API. Respuesta: {auth_user_response}")
-            # user_email permanecerá None
+            logger.error(f"PROFILE_ME - APIError al obtener datos de 'profiles' para {user_id}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'", exc_info=True)
+            profile_data_from_db = None 
+    except Exception as e_profiles:
+        logger.error(f"PROFILE_ME - Excepción inesperada al obtener datos de 'profiles' para {user_id}: {type(e_profiles).__name__} - {e_profiles}", exc_info=True)
+        profile_data_from_db = None
+
+    # --- Bloque 2: Obtener el email de auth.users (si no está ya en TokenData) ---
+    # Si tu TokenData ya incluye el email (extraído del JWT en get_current_user), puedes omitir este bloque.
+    # Asumiré que necesitas obtenerlo aquí.
+    # NOTA: supabase.auth.admin.get_user_by_id() requiere privilegios de admin (service_role_key).
+    # Si tu `supabase_client` está instanciado con la service_role_key, esto funcionará.
+    # Si no, y si el email está en el JWT, es mejor extraerlo en `get_current_user` y añadirlo a `TokenData`.
+    
+    # Alternativa más simple si el email está en el JWT y lo añades a TokenData:
+    # user_email_from_auth = current_user.email (si TokenData.email existe)
+
+    try:
+        logger.debug(f"PROFILE_ME - Intentando obtener email para user_id: {user_id} vía admin API.")
+        # Esta es una llamada de admin, asegúrate que tu cliente `supabase` tenga los permisos.
+        # Para obtener el email del usuario actual autenticado, es más común usar `supabase.auth.get_user()`
+        # pasando el token JWT actual, pero `get_current_user` ya validó el token.
+        # Si `TokenData` ya tuviera el email, sería más directo.
+        # Por ahora, mantendré tu lógica con get_user_by_id, asumiendo que `supabase` es un cliente admin.
+
+        auth_user_api_response = supabase.auth.admin.get_user_by_id(user_id=str(user_id))
+                
+        if auth_user_api_response and hasattr(auth_user_api_response, 'user') and auth_user_api_response.user and hasattr(auth_user_api_response.user, 'email'):
+            user_email_from_auth = auth_user_api_response.user.email
+            logger.debug(f"PROFILE_ME - Email obtenido de auth.admin API: {user_email_from_auth}")
+        else:
+            logger.warning(f"PROFILE_ME - No se pudo obtener el email para {user_id} desde auth.admin API. Respuesta: {auth_user_api_response}")
             
-    except APIError as e_auth_api: # Capturar APIError de Supabase Auth
-        print(f"ERROR_PROFILE_GET: APIError al obtener datos de auth.users con admin API: {type(e_auth_api).__name__} - {e_auth_api.message if hasattr(e_auth_api, 'message') else e_auth_api}")
-        user_email = None
-    except Exception as e_auth: # Otras excepciones
-        print(f"ERROR_PROFILE_GET: Excepción genérica al obtener datos de auth.users con admin API: {type(e_auth).__name__} - {e_auth}")
-        user_email = None
+    except APIError as e_auth_api:
+        logger.error(f"PROFILE_ME - APIError al obtener user de auth.admin API para {user_id}: {e_auth_api.message if hasattr(e_auth_api, 'message') else e_auth_api}", exc_info=True)
+    except Exception as e_auth:
+        logger.error(f"PROFILE_ME - Excepción genérica al obtener user de auth.admin API para {user_id}: {type(e_auth).__name__} - {e_auth}", exc_info=True)
+
 
     # --- Bloque 3: Construir la respuesta final ---
-    # Crear un diccionario base para construir ProfileResponse
-    response_payload = {"id": user_id, "email": user_email} # (8)
+    # Usar los datos de TokenData directamente para id, organization_id, y role
+    response_payload = {
+        "id": current_user.user_id,
+        "email": user_email_from_auth, # Email obtenido de auth.users
+        "organization_id": current_user.organization_id, # <--- DE TokenData
+        "role": current_user.role                        # <--- DE TokenData
+    }
 
-    if profile_data_from_db: # (9)
-        response_payload.update(profile_data_from_db)
+    # Añadir datos de la tabla 'profiles' si se obtuvieron
+    if profile_data_from_db:
+        # Asegurarse de no sobrescribir id o email si vinieran de profile_data_from_db
+        # con valores diferentes a los de auth.
+        # Los campos de profile_data_from_db son: full_name, avatar_url, timezone, created_at, updated_at
+        response_payload.update({
+            k: v for k, v in profile_data_from_db.items() 
+            if k in ["full_name", "avatar_url", "timezone", "created_at", "updated_at"]
+        })
+    
+    logger.debug(f"PROFILE_ME - Payload final para validación de ProfileResponse: {response_payload}")
     
     try:
-        # Pydantic usará los defaults de ProfileResponse para campos no presentes en response_payload
-        # (ej. timezone="UTC" si no vino de la DB)
-        return ProfileResponse.model_validate(response_payload) # (10)
+        validated_response = ProfileResponse.model_validate(response_payload)
+        logger.info(f"PROFILE_ME - Perfil devuelto exitosamente para user {user_id}.")
+        return validated_response
     except Exception as val_err: 
-        print(f"ERROR_PROFILE_GET: Error al validar ProfileResponse: {val_err}. Payload intentado: {response_payload}")
-        raise HTTPException(status_code=500, detail="Error al procesar datos del perfil.")
+        logger.error(f"PROFILE_ME - Error al validar ProfileResponse para user {user_id}: {val_err}. Payload intentado: {response_payload}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error al procesar datos del perfil del usuario.")
 
 
 @router.put(

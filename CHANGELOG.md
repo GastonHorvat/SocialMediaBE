@@ -2,6 +2,56 @@
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+## [No Lanzado] - 2025-06-04
+
+### 🛠 Mejoras y Cambios Técnicos (Backend)
+
+*   **Ajustes en la Gestión de Configuración (`app/core/config.py`):**
+    *   Se ha modificado la forma en que se cargan y se definen los valores por defecto para las configuraciones de OpenAI (modelo, tamaño, calidad de imagen). Ahora se prioriza la carga desde el archivo `.env`, y la clase `Settings` define estos campos como requeridos si no se proveen valores por defecto en el código, mejorando la claridad sobre las dependencias de configuración.
+    *   Se simplificó la carga de variables de entorno delegando más responsabilidad a `pydantic-settings` para la lectura del archivo `.env`.
+
+*   **Refinamiento de Modelos Pydantic (`app/models/post_models.py` y otros):**
+    *   Se aseguró la consistencia con Pydantic V2, utilizando `model_config = ConfigDict(...)` y `model_validate()` donde corresponde.
+    *   Se añadió el campo `preview_content_type` a `GeneratePreviewImageResponse` y `content_type` a `ConfirmWIPImageDetails` para un manejo más preciso de los tipos MIME de las imágenes de previsualización.
+
+*   **Servicio de Generación de Imágenes IA (`app/services/ai_image_generator.py`):**
+    *   Se creó la nueva función `generate_and_upload_ai_image_to_wip` específicamente para el flujo de generación de previsualizaciones con IA que se almacenan en la carpeta `/wip/`. Esta función encapsula la generación de la imagen y su subida al bucket de previsualizaciones.
+    *   Se modificó la función existente `generate_image_from_prompt` (utilizada por `ai_router.py`) para que:
+        *   Devuelva también el `storage_path` de la imagen final almacenada en `post_media`.
+        *   Utilice `storage_service.get_post_media_storage_path()` para una estructura de ruta de archivo final más robusta y única.
+        *   Utilice `storage_service.upload_file_bytes_to_storage()` para la subida, manteniendo la consistencia con otros servicios.
+    *   La función `generate_image_base64_only` ahora obtiene los parámetros de configuración de la IA (modelo, tamaño, calidad) directamente desde `settings`.
+
+*   **Servicio de Storage (`app/services/storage_service.py`):**
+    *   Se ajustó el manejo de llamadas asíncronas al SDK de `supabase-py` v2.x. Se identificó que varios métodos del SDK (como `.upload()`, `.list()`, y potencialmente `.remove()`, `.move()`) se comportan de manera síncrona en el entorno actual o devuelven objetos no directamente "awaitables".
+    *   Se aplicó (o se está en proceso de aplicar) `asyncio.to_thread` a estas llamadas síncronas del SDK dentro de las funciones `async def` del servicio para evitar el bloqueo del event loop de FastAPI y resolver `TypeError`s relacionados.
+    *   Se actualizaron las constantes de nombres de bucket (`POST_MEDIA_BUCKET`, `POST_PREVIEWS_BUCKET`) para que coincidan con los nombres reales en el proyecto Supabase (`content.flow.media`, `post.previews`).
+    *   La función `move_file_in_storage` ahora acepta `content_type_for_destination` para asegurar el tipo MIME correcto al mover archivos entre buckets.
+
+*   **Routers (`app/api/v1/routers/posts.py`, `app/api/v1/routers/ai_router.py`):**
+    *   **`posts.py`:**
+        *   Se corrigieron las firmas de los endpoints para alinearse con las mejores prácticas de FastAPI y resolver advertencias de Pylance (uso de `*` para keyword-only arguments).
+        *   Se ajustaron las llamadas a los métodos de base de datos de Supabase (ej. `.execute()`) para que no usen `await` si se ha determinado que son síncronas en el entorno actual, previniendo `TypeError`s.
+        *   Se añadieron logs detallados (niveles `INFO` y `DEBUG` con prefijos como `PATCH_LOG`, `TIMING`) a los nuevos endpoints de imágenes y al `PATCH` modificado para facilitar la depuración de flujos complejos y la identificación de cuellos de botella.
+        *   Se corrigieron `NameError` por nombres incorrectos de modelos de respuesta (ej. `PreviewImageWIPResponse` vs `GeneratePreviewImageResponse`).
+        *   Se corrigieron `AttributeError` por nombres incorrectos de funciones de servicio (ej. `delete_all_files_in_folder`).
+    *   **`ai_router.py`:** El endpoint `POST /posts/{post_id}/generate-image` fue modificado para que, al llamar a `generate_image_from_prompt`, reciba y guarde tanto `media_url` como el nuevo `media_storage_path` en la base de datos.
+    *   **`profiles.py` (o donde esté `/profiles/me`):** Se realizaron ajustes para asegurar que el endpoint `GET /api/v1/profiles/me` devuelva `organization_id` y `role` (obtenidos de `TokenData`) al frontend, facilitando al cliente la construcción de rutas y la lógica de permisos.
+    *   **`main.py`:** Se añadió la configuración de `CORSMiddleware` para manejar las solicitudes Cross-Origin del frontend y resolver errores de política CORS.
+
+### 🐛 Correcciones de Errores (Backend)
+
+*   Resueltos múltiples `TypeError`, `ImportError`, `NameError`, y `AttributeError` que surgieron durante la implementación y prueba de las nuevas funcionalidades de gestión de imágenes, relacionados con el manejo de `async/await` con `supabase-py`, la carga de configuraciones, y la definición/llamada de funciones y modelos.
+*   Corregido el error "Bucket not found" en Supabase Storage asegurando que los nombres de bucket en el código coincidan con los existentes en Supabase.
+*   Se está trabajando en resolver errores `500 (Internal Server Error)` provenientes de Supabase Storage relacionados con políticas RLS, asegurando que el rol `authenticated` tenga los permisos de `SELECT` necesarios en las tablas `public.organization_members` y `public.posts`.
+
+### ⚠️ Notas (Backend)
+
+*   La interacción con `supabase-py` v2.15.1 en un entorno `async` ha requerido ajustes finos, tratando varias operaciones del SDK como síncronas y usando `asyncio.to_thread` cuando es necesario para el I/O de storage.
+*   La depuración de las políticas RLS de Supabase Storage para las subidas directas del frontend está en curso.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-06-03
 
 ### ✨ Nuevas Características (Features)
