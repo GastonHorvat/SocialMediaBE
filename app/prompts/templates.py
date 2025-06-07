@@ -36,17 +36,17 @@ Ejemplo de la Estructura de Salida Exacta Esperada:
 IDEA_START
 HOOK::Este es un ejemplo de gancho para la primera idea.
 DESCRIPTION::Aquí va la descripción del contenido de la primera idea. Debe ser claro y conciso.
-FORMAT::formato sugerido (elige uno de los formatos mencionados)
+FORMAT::Publicación de Imagen Única (elige uno de los formatos mencionados)
 IDEA_END
 IDEA_START
 HOOK::Otro gancho creativo para la segunda idea.
 DESCRIPTION::Detalles sobre cómo se desarrollaría la segunda idea, explicando su valor.
-FORMAT::formato sugerido (elige uno de los formatos mencionados)
+FORMAT::Publicación de Texto Breve (elige uno de los formatos mencionados)
 IDEA_END
 IDEA_START
 HOOK::Un gancho final que incite a la curiosidad para la tercera idea.
 DESCRIPTION::Explicación del contenido y el impacto esperado de la tercera idea.
-FORMAT::formato sugerido (elige uno de los formatos mencionados)
+FORMAT::Video Corto Vertical (elige uno de los formatos mencionados)
 IDEA_END
 """
 # -------------------------------------------------------------------------------------------------------------
@@ -150,5 +150,5 @@ GENERATE_IMAGE_FOR_SOCIAL_POST_V1 = """
 Generar una imagen visualmente atractiva y profesional, adecuada para la red social '{social_network}'. La imagen debe ser estilo fotográfico realista y representar el concepto principal del siguiente post:
 Título del Post: "{post_title}"
 Contenido del Post (ideas clave): "{post_content_excerpt}"
-Evitar incluir texto visible en la imagen. La imagen debe ser clara, bien compuesta y relevante para el tema.
+NUNCA incluir texto en la imagen. La imagen debe ser clara, bien compuesta y relevante para el tema.
 """

@@ -1,5 +1,5 @@
 # app/api/v1/routers/posts.py
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Path
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Path, File, UploadFile   
 from typing import List, Optional, Dict, Tuple
 from uuid import UUID
 from datetime import date, datetime # Quitar date si no se usa
@@ -440,42 +440,6 @@ async def generate_ia_preview_image_for_wip(
     
     return response_payload
 
-@router.post(
-    "/{post_id}/prepare-wip-for-user-upload",
-    status_code=status.HTTP_204_NO_CONTENT, # Éxito sin contenido
-    summary="Preparar Carpeta de Trabajo (WIP) para Subida de Usuario",
-    description="Limpia la carpeta 'wip' del post para que el frontend pueda subir de forma segura una nueva imagen de previsualización de usuario.",
-    tags=["Posts - Image Management"]
-)
-async def prepare_wip_folder_for_user_upload(
-    post_id: UUID = Path(..., description="ID del post cuya carpeta 'wip' se limpiará."),
-    *, # <--- MARCADOR
-    current_user: TokenData = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_supabase_client)
-):
-    if not current_user.organization_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
-    try:
-        # SIN await para la llamada a DB
-        post_check_res = supabase.table("posts").select("id").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).limit(1).execute()
-        if not post_check_res.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado.")
-    except APIError as e:
-        # ...
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al verificar post.")
-
-    wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
-    # CON await para el servicio de storage
-    success, error_msg = await storage_service.delete_all_files_in_folder(
-        supabase_client=supabase, bucket_name=storage_service.POST_PREVIEWS_BUCKET, folder_path=wip_folder_path
-    )
-    if not success:
-        # ...
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"No se pudo limpiar WIP: {error_msg}")
-    return
-
-
-
 # ================================================================================
 # SECCIÓN: MODIFICACIÓN DEL ENDPOINT PATCH PARA MANEJO DE IMÁGENES
 # ================================================================================
@@ -548,7 +512,25 @@ async def update_post_partial(
     logger.debug(f"PATCH_LOG - Old media_storage_path: {old_media_storage_path}")
 
     # Preparar payload para actualizar DB
-    db_update_payload: Dict[str, any] = post_update_data.model_dump(exclude_unset=True, exclude_none=False)
+    raw_payload_from_client = post_update_data.model_dump(exclude_unset=True, exclude_none=False)
+    
+    db_update_payload: Dict[str, any] = {}
+
+    # Iterar sobre los campos enviados por el cliente y construir el payload para la DB
+    for key, value in raw_payload_from_client.items():
+        if key == "media_url":
+            if value is not None: # Si se envió una HttpUrl
+                db_update_payload[key] = str(value)
+            else: # Si se envió media_url: null
+                db_update_payload[key] = None
+        elif isinstance(value, UUID): # <--- ESTA ES LA LÍNEA MÁGICA
+            db_update_payload[key] = str(value) # Convertimos cualquier UUID a string
+        elif key == "confirm_wip_image_details":
+            pass # Este campo no va a la DB, se maneja por separado
+        else:
+            db_update_payload[key] = value
+            
+    logger.debug(f"PATCH_LOG - Payload inicial para DB (después de model_dump y conversión de HttpUrl): {db_update_payload}")
     if 'confirm_wip_image_details' in db_update_payload: # Este campo no va a la DB
         del db_update_payload['confirm_wip_image_details']
     
@@ -557,8 +539,8 @@ async def update_post_partial(
     moved_wip_image_final_path: Optional[str] = None # Para rollback si DB falla
 
     # --- Lógica de Imágenes ---
-    if has_confirm_wip: # Equivalente a post_update_data.confirm_wip_image_details is not None
-        wip_details = post_update_data.confirm_wip_image_details # No puede ser None aquí
+    if has_confirm_wip: 
+        wip_details = post_update_data.confirm_wip_image_details
         logger.info(f"PATCH_LOG - Confirmando imagen WIP para post {post_id}: path='{wip_details.path}', ext='{wip_details.extension}', type='{wip_details.content_type}'")
 
         expected_wip_storage_path = storage_service.get_wip_image_storage_path(current_user.organization_id, post_id, wip_details.extension)
@@ -571,7 +553,7 @@ async def update_post_partial(
         logger.debug(f"PATCH_LOG - Destino final en post_media: {destination_final_media_path}")
 
         move_start_time = datetime.now()
-        moved_path, move_error = await storage_service.move_file_in_storage(
+        moved_path, move_error = await storage_service.move_file_in_storage( # moved_path se define aquí
             supabase_client=supabase,
             source_bucket=storage_service.POST_PREVIEWS_BUCKET,
             source_path_in_bucket=wip_details.path,
@@ -582,24 +564,28 @@ async def update_post_partial(
         move_time_taken = (datetime.now() - move_start_time).total_seconds()
         logger.info(f"PATCH_LOG - storage_service.move_file_in_storage tomó: {move_time_taken:.4f}s. Resultado: moved_path='{moved_path}', move_error='{move_error}'")
 
-        if move_error or not moved_path:
+        if move_error or not moved_path: # Verificar error ANTES de usar moved_path
             logger.error(f"PATCH_LOG - Error moviendo imagen de WIP a Media para post {post_id}: {move_error}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"No se pudo confirmar la imagen de previsualización (error de storage): {move_error}")
         
+        # --- MOVER ESTAS LÍNEAS AQUÍ ---
         moved_wip_image_final_path = moved_path # Para posible rollback
         
-        db_update_payload["media_url"] = storage_service._build_public_url(supabase, storage_service.POST_MEDIA_BUCKET, moved_path, add_timestamp_bust=False)
-        db_update_payload["media_storage_path"] = moved_path
+        new_media_url = storage_service._build_public_url(supabase, storage_service.POST_MEDIA_BUCKET, moved_path, add_timestamp_bust=False)
+        db_update_payload["media_url"] = str(new_media_url) 
+        db_update_payload["media_storage_path"] = moved_path # Ahora moved_path tiene un valor
+        # --- FIN DE LÍNEAS MOVIDAS ---
+        
         logger.info(f"PATCH_LOG - Payload de DB actualizado con nueva media: media_url='{db_update_payload['media_url']}', media_storage_path='{db_update_payload['media_storage_path']}'")
 
         if old_media_storage_path and old_media_storage_path != moved_path:
             logger.info(f"PATCH_LOG - Programando borrado de imagen principal antigua: {storage_service.POST_MEDIA_BUCKET}/{old_media_storage_path}")
             final_storage_paths_to_delete_post_db.append((storage_service.POST_MEDIA_BUCKET, old_media_storage_path))
         
-    elif is_deleting_media_explicitly: # Borrar imagen principal
-        logger.info(f"PATCH_LOG - Solicitud para borrar imagen principal del post {post_id}.")
-        db_update_payload["media_url"] = None
-        db_update_payload["media_storage_path"] = None
+        elif is_deleting_media_explicitly: # Borrar imagen principal
+         logger.info(f"PATCH_LOG - Solicitud para borrar imagen principal del post {post_id}.")
+         db_update_payload["media_url"] = None
+         db_update_payload["media_storage_path"] = None
         if old_media_storage_path:
             logger.info(f"PATCH_LOG - Programando borrado de imagen principal existente: {storage_service.POST_MEDIA_BUCKET}/{old_media_storage_path}")
             final_storage_paths_to_delete_post_db.append((storage_service.POST_MEDIA_BUCKET, old_media_storage_path))
@@ -758,3 +744,145 @@ async def soft_delete_post(
     # ... (loguear errores)
 
     return PostResponse.model_validate(deleted_post_data)
+
+
+
+## ================================================================================
+## NUEVO ENDPOINT PARA SUBIDA DE IMAGEN DE PREVISUALIZACIÓN DE USUARIO A WIP
+## ================================================================================
+
+@router.post(
+    "/{post_id}/upload-wip-preview",
+    response_model=GeneratePreviewImageResponse, # Reutilizamos el mismo modelo de respuesta que para la IA
+    summary="Subir Imagen de Previsualización de Usuario a WIP",
+    description="El usuario sube un archivo de imagen, el backend limpia la carpeta 'wip' del post "
+                "y sube la nueva imagen allí. Devuelve los detalles de la imagen en WIP.",
+    tags=["Posts - Image Management"]
+)
+async def upload_user_preview_image_to_wip(
+    post_id: UUID = Path(..., description="ID del post para el cual subir la previsualización."),
+    image_file: UploadFile = File(..., description="El archivo de imagen a subir."), # FastAPI maneja el multipart/form-data
+    *,
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    request_start_time = datetime.now()
+    logger.info(f"UPLOAD_WIP_LOG [{request_start_time.isoformat()}] - INICIO para post {post_id}, user {current_user.user_id}, filename: {image_file.filename}")
+
+    if not current_user.organization_id:
+        logger.warning(f"UPLOAD_WIP_LOG - Usuario {current_user.user_id} sin organization_id intentando subir preview para post {post_id}.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
+
+    # 1. Validaciones Opcionales del Archivo (Tipo, Tamaño)
+    # Estos límites deberían idealmente estar en la configuración (settings)
+    ALLOWED_CONTENT_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+    MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024 # 20 MB
+
+    if image_file.content_type not in ALLOWED_CONTENT_TYPES:
+        logger.warning(f"UPLOAD_WIP_LOG - Tipo de archivo no permitido: {image_file.content_type} para post {post_id}. Archivo: {image_file.filename}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Tipo de archivo no permitido: {image_file.content_type}. Permitidos: png, jpg, jpeg, webp, gif.")
+    
+    # Para verificar el tamaño, necesitamos leer el archivo, lo cual puede ser costoso para archivos grandes.
+    # FastAPI/Starlette pueden tener un límite máximo de tamaño de cuerpo de solicitud configurable.
+    # Si el archivo es muy grande, podría fallar antes de llegar aquí.
+    # Una forma de verificar el tamaño si UploadFile lo soporta sin leer todo en memoria:
+    # if image_file.size and image_file.size > MAX_FILE_SIZE_BYTES:
+    # logger.warning(f"UPLOAD_WIP_LOG - Archivo demasiado grande: {image_file.size} bytes para post {post_id}. Archivo: {image_file.filename}")
+    # raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"El archivo excede el tamaño máximo de {MAX_FILE_SIZE_BYTES // (1024*1024)}MB.")
+
+    # 2. Verificar que el post pertenece al usuario/organización (seguridad)
+    logger.debug(f"UPLOAD_WIP_LOG - Verificando post {post_id} para org {current_user.organization_id}.")
+    try:
+        # SIN await (asumiendo comportamiento síncrono de .execute())
+        post_check_res = supabase.table("posts").select("id").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).limit(1).execute()
+        if not post_check_res.data:
+            logger.warning(f"UPLOAD_WIP_LOG - Post {post_id} no encontrado o no pertenece a org {current_user.organization_id}.")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o no pertenece a la organización.")
+    except APIError as e:
+        logger.error(f"UPLOAD_WIP_LOG - DB Error verificando post {post_id}: {e.message}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al verificar datos del post.")
+
+    # 3. Limpiar la carpeta /wip/ del post ANTES de subir la nueva imagen
+    wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
+    logger.info(f"UPLOAD_WIP_LOG - Limpiando carpeta WIP: {wip_folder_path} para post {post_id}")
+    
+    cleanup_start_time = datetime.now()
+    cleanup_success, cleanup_error = await storage_service.delete_all_files_in_folder(
+        supabase_client=supabase, # Este cliente usa service_key implícitamente
+        bucket_name=storage_service.POST_PREVIEWS_BUCKET,
+        folder_path=wip_folder_path
+    )
+    cleanup_time_taken = (datetime.now() - cleanup_start_time).total_seconds()
+    logger.info(f"UPLOAD_WIP_LOG - Limpieza de WIP para post {post_id} tomó: {cleanup_time_taken:.4f}s. Éxito: {cleanup_success}")
+
+    if not cleanup_success:
+        logger.error(f"UPLOAD_WIP_LOG - Fallo crítico al limpiar carpeta WIP '{wip_folder_path}' para post {post_id}: {cleanup_error}")
+        # Decidimos fallar aquí si la limpieza no es exitosa, para evitar estados inconsistentes en WIP.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error preparando el espacio para la nueva previsualización: {cleanup_error}")
+
+    # 4. Preparar datos para la subida
+    try:
+        file_bytes = await image_file.read() # Leer el contenido del archivo
+        # `image_file.filename` puede ser None si no se envía, o podría no tener extensión.
+        original_filename = image_file.filename if image_file.filename else "untitled"
+        file_extension = original_filename.split(".")[-1].lower() if "." in original_filename else "png" # Default a png
+        
+        # Re-validar extensión por si el content_type era genérico
+        valid_extensions = ["png", "jpg", "jpeg", "webp", "gif"]
+        if file_extension not in valid_extensions:
+            # Si el content_type pasó pero la extensión inferida no es válida, usar una default o la del content_type
+            if image_file.content_type == "image/png": file_extension = "png"
+            elif image_file.content_type == "image/jpeg": file_extension = "jpg"
+            elif image_file.content_type == "image/webp": file_extension = "webp"
+            elif image_file.content_type == "image/gif": file_extension = "gif"
+            else: # Último recurso, pero el chequeo de content_type debería haberlo prevenido
+                logger.warning(f"UPLOAD_WIP_LOG - Extensión de archivo '{file_extension}' no es la esperada para post {post_id}, pero content_type '{image_file.content_type}' fue permitido. Se usará extensión inferida o 'png'.")
+                if file_extension not in valid_extensions: file_extension = "png" # Default final
+
+
+        content_type = image_file.content_type or f"image/{file_extension}" # Usar el content_type del archivo
+        if not content_type.startswith("image/"): # Doble chequeo
+            logger.error(f"UPLOAD_WIP_LOG - Content-type final '{content_type}' no es de imagen para post {post_id}.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo proporcionado no parece ser una imagen válida después del procesamiento.")
+
+    except Exception as e_read:
+        logger.error(f"UPLOAD_WIP_LOG - Error leyendo el archivo subido para post {post_id}: {e_read}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudo procesar el archivo subido.")
+
+    active_wip_storage_path = storage_service.get_wip_image_storage_path(
+        organization_id=current_user.organization_id,
+        post_id=post_id,
+        extension=file_extension # Usar la extensión determinada
+    )
+    
+    logger.info(f"UPLOAD_WIP_LOG - Subiendo archivo '{original_filename}' (como '{active_wip_storage_path}') a WIP para post {post_id}. Content-type: '{content_type}', Bytes: {len(file_bytes)}")
+    
+    upload_start_time = datetime.now()
+    # 5. Subir el archivo a WIP usando el storage_service
+    public_url, uploaded_path, upload_error = await storage_service.upload_file_bytes_to_storage(
+        supabase_client=supabase,
+        bucket_name=storage_service.POST_PREVIEWS_BUCKET,
+        file_path_in_bucket=active_wip_storage_path,
+        file_bytes=file_bytes,
+        content_type=content_type, # Content type del archivo
+        upsert=True, # Sobrescribe preview_active.{ext} si ya existe con esa extensión
+        add_timestamp_to_url=True # Cache-busting para la URL de preview
+    )
+    upload_time_taken = (datetime.now() - upload_start_time).total_seconds()
+    logger.info(f"UPLOAD_WIP_LOG - Subida a WIP para post {post_id} tomó: {upload_time_taken:.4f}s. URL: {public_url}, Error: {upload_error}")
+
+    if upload_error or not public_url or not uploaded_path:
+        logger.error(f"UPLOAD_WIP_LOG - Error subiendo archivo de usuario a WIP para post {post_id}: {upload_error}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error al guardar la imagen de previsualización: {upload_error}")
+
+    response_payload = GeneratePreviewImageResponse(
+        preview_image_url=public_url,
+        preview_storage_path=uploaded_path,
+        preview_image_extension=file_extension,
+        preview_content_type=content_type
+    )
+    
+    total_request_time = (datetime.now() - request_start_time).total_seconds()
+    logger.info(f"UPLOAD_WIP_LOG [{datetime.now().isoformat()}] - ÉXITO para post {post_id}. Tiempo total: {total_request_time:.4f}s.")
+    
+    return response_payload

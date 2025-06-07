@@ -224,11 +224,18 @@ async def generate_caption_and_save_post_endpoint( # Renombrado
         logger.error(f"Parseo de caption fallido. Raw: '{llm_full_response_text}'")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="IA no generó el formato de caption esperado.")
 
+    # Decidir qué título usar, priorizando el del usuario.
+    final_title = request_data.title if request_data.title and request_data.title.strip() else generated_title
+
     post_to_create = PostCreate(
-        title=generated_title,
+        title=final_title,  # Usamos el título final decidido
         content_text=generated_caption.strip(),
         social_network=request_data.target_social_network,
-        content_type="image", # Asume que es para una imagen
+        content_type="image",
+        # Pasamos los IDs opcionales que vienen en la petición
+        prompt_id=request_data.prompt_id,
+        generation_group_id=request_data.generation_group_id,
+        original_post_id=request_data.original_post_id
     )
     try:
         newly_created_post_data = await create_draft_post_from_ia(

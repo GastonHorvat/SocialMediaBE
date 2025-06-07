@@ -1,6 +1,7 @@
 # app/models/ai_models.py
 from pydantic import BaseModel, Field, HttpUrl
 from typing import Optional, List, Dict
+from uuid import UUID 
 
 # -------------------------------------------------------------------------------------------------------------
 # Modelos para la Generación de IDEAS Y TITULOS DE CONTENIDO
@@ -84,6 +85,18 @@ class GeneratedTitlesResponse(BaseModel):
 
 class GenerateSingleImageCaptionRequest(BaseModel):
     """Petición para generar un caption para una publicación de imagen única."""
+    
+    # --- NUEVOS CAMPOS AÑADIDOS ---
+    title: Optional[str] = Field(
+        None, 
+        max_length=255,
+        description="Título provisto por el usuario. Si se proporciona, se usará este en lugar de uno generado por IA."
+    )
+    prompt_id: Optional[UUID] = Field(None, description="ID del prompt de IA usado, si aplica.")
+    generation_group_id: Optional[UUID] = Field(None, description="ID para agrupar varias generaciones de posts.")
+    original_post_id: Optional[UUID] = Field(None, description="ID del post original si este es una variación.")
+    # --- FIN DE CAMPOS AÑADIDOS ---
+
     main_idea: Optional[str] = Field(
         None, 
         description="Idea principal, tema o mensaje clave que la imagen busca transmitir.",
@@ -112,26 +125,17 @@ class GenerateSingleImageCaptionRequest(BaseModel):
 
     class Config:
         from_attributes = True
-        # Para Pydantic v1:
-        # json_schema_extra = {
-        #     "example": {
-        #         "main_idea": "Promocionar nuestro nuevo ebook sobre marketing digital.",
-        #         "image_description": "Una persona leyendo un ebook en una tablet.",
-        #         "target_social_network": "LinkedIn",
-        #         "call_to_action": "Descarga tu copia gratuita (enlace en bio).",
-        #         "additional_notes": "Enfocarse en los beneficios para pequeñas empresas."
-        #     }
-        # }
-        # Para Pydantic v2:
         model_config = {
             "json_schema_extra": {
                 "examples": [
                     {
+                        "title": "¡Nuestro Nuevo Ebook ya está Aquí!", # Ejemplo con el nuevo campo
                         "main_idea": "Promocionar nuestro nuevo ebook sobre marketing digital.",
                         "image_description": "Una persona leyendo un ebook en una tablet.",
                         "target_social_network": "LinkedIn",
                         "call_to_action": "Descarga tu copia gratuita (enlace en bio).",
-                        "additional_notes": "Enfocarse en los beneficios para pequeñas empresas."
+                        "additional_notes": "Enfocarse en los beneficios para pequeñas empresas.",
+                        "generation_group_id": "7118415c-ea3b-4926-97cd-9750e0b402d7" # Ejemplo con UUID
                     }
                 ]
             }

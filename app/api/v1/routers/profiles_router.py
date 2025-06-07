@@ -74,7 +74,7 @@ async def get_current_user_profile(
         # Si `TokenData` ya tuviera el email, sería más directo.
         # Por ahora, mantendré tu lógica con get_user_by_id, asumiendo que `supabase` es un cliente admin.
 
-        auth_user_api_response = supabase.auth.admin.get_user_by_id(user_id=str(user_id))
+        auth_user_api_response = supabase.auth.admin.get_user_by_id(str(user_id))
                 
         if auth_user_api_response and hasattr(auth_user_api_response, 'user') and auth_user_api_response.user and hasattr(auth_user_api_response.user, 'email'):
             user_email_from_auth = auth_user_api_response.user.email

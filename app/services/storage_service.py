@@ -9,7 +9,7 @@ from uuid import UUID as PyUUID
 from supabase import Client as SupabaseClient # Asumo que este es el cliente que estás usando
 
 # --- Constantes de Buckets ---
-POST_MEDIA_BUCKET = "content.flow.media" # Asumo que este es el bucket de medios finales
+POST_MEDIA_BUCKET = "media.content" # Asumo que este es el bucket de medios finales
 POST_PREVIEWS_BUCKET = "post.previews"   # Asumo que este es el bucket para WIP y previsualizaciones
 WIP_FOLDER_NAME = "wip"
 WIP_ACTIVE_FILENAME_BASE = "preview_active" # Usado para construir el nombre del archivo activo en WIP
@@ -74,10 +74,12 @@ async def move_file_in_storage(
     supabase_client: SupabaseClient,
     source_bucket: str,
     source_path_in_bucket: str,
-    destination_bucket: str,
+    destination_bucket: str, # Este será POST_MEDIA_BUCKET
     destination_path_in_bucket: str,
     content_type_for_destination: str
 ) -> Tuple[Optional[str], Optional[str]]:
+    
+    logger.info(f"MOVE_LOG - Iniciando move de {source_bucket}/{source_path_in_bucket} a {destination_bucket}/{destination_path_in_bucket}")
     try:
         if source_bucket == destination_bucket:
             # Envolver llamada síncrona
@@ -94,21 +96,20 @@ async def move_file_in_storage(
             def _download_sync():
                 return supabase_client.storage.from_(source_bucket).download(path=source_path_in_bucket)
             file_bytes_to_move: bytes = await asyncio.to_thread(_download_sync)
-            
-            _public_url, _path, upload_error = await upload_file_bytes_to_storage(
-                supabase_client,
-                bucket_name=destination_bucket,
-                file_path_in_bucket=destination_path_in_bucket,
-                file_bytes=file_bytes_to_move,
-                content_type=content_type_for_destination,
-                upsert=True
-            )
+            logger.debug(f"MOVE_LOG - Intentando subir a: {destination_bucket}/{destination_path_in_bucket} con content_type: {content_type_for_destination}")
+            _public_url, _path, upload_error = await upload_file_bytes_to_storage( # Esta función ya la tienes
+            supabase_client=supabase_client,
+            bucket_name=destination_bucket, # <--- USAR EL BUCKET DE PRUEBA/EFECTIVO
+            file_path_in_bucket=destination_path_in_bucket,
+            file_bytes=file_bytes_to_move,
+            content_type=content_type_for_destination,
+            upsert=False # Para imágenes finales con nombre UUID, upsert=False es mejor
+        )
+
             if upload_error:
-                err_msg = f"Fallo al subir a {destination_bucket}/{destination_path_in_bucket} después de descargar: {upload_error}"
-                logger.error(err_msg)
-                return None, err_msg
-            
-            logger.info(f"Archivo 'movido' (descargado y subido) de {source_bucket}/{source_path_in_bucket} a {destination_bucket}/{destination_path_in_bucket}")
+                logger.error(f"MOVE_LOG - Fallo al subir a destino {destination_bucket}: {upload_error}")
+                return None, upload_error
+            logger.info(f"MOVE_LOG - Subida a {destination_path_in_bucket} en bucket {destination_bucket} completada.")
             await delete_files_from_storage(supabase_client, source_bucket, [source_path_in_bucket])
             return destination_path_in_bucket, None
     except Exception as e:

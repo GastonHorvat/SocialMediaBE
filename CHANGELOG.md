@@ -2,6 +2,97 @@
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+## [No Lanzado] - 2025-06-07
+
+### ✨ Nuevas Características y Mejoras Funcionales (Backend)
+
+*   **Respeto por el Título del Usuario en Generación de Captions (`POST /api/v1/ai/generate-single-image-caption`):**
+    *   Se implementó una nueva lógica de negocio para priorizar el título proporcionado por el usuario.
+    *   Si el payload de la petición incluye un `title`, este se usará para crear el post. El título generado por la IA solo se usará como fallback si el usuario no proveyó uno.
+    *   Se actualizó el modelo Pydantic `GenerateSingleImageCaptionRequest` para aceptar formalmente los campos `title`, `prompt_id`, `generation_group_id` y `original_post_id`, permitiendo una creación de posts más rica y con mejor trazabilidad desde la UI.
+
+### 🛠 Mejoras y Cambios Técnicos (Backend)
+
+*   **Cambio Estratégico de Bucket de Almacenamiento para Medios:**
+    *   Tras una depuración exhaustiva que reveló problemas de permisos persistentes e irresolubles en el bucket `content.flow.media`, se tomó la decisión estratégica de abandonarlo.
+    *   Se modificó la constante `POST_MEDIA_BUCKET` en `app/services/storage_service.py` para apuntar permanentemente al nuevo bucket `media.content`, que ha demostrado ser funcional y no presentar problemas de RLS para el rol `service_role`.
+    *   Esto resuelve de forma definitiva los errores 500 y 403 que ocurrían al confirmar imágenes de WIP.
+
+*   **Refactorización del Endpoint de Perfil de Usuario (`GET /api/v1/profiles/me`):**
+    *   Se corrigió una llamada a la API de Supabase en `profiles_router.py`, eliminando un `TypeError` que ocurría al llamar a `supabase.auth.admin.get_user_by_id()` con un argumento nombrado incorrecto.
+
+### 🐛 Correcciones de Errores (Backend)
+
+*   **Solucionado `TypeError: Object of type UUID is not JSON serializable`:**
+    *   Se identificó y corrigió un bug crítico que causaba errores 500 al intentar enviar datos con campos de tipo `UUID` a Supabase.
+    *   El error fue resuelto en dos lugares clave:
+        1.  En el endpoint `PATCH /api/v1/posts/{post_id}` (`posts.py`), asegurando que todos los campos UUID en el payload de actualización se conviertan a `string` antes de la llamada a la DB.
+        2.  En el servicio `create_draft_post_from_ia` (`ai_content_generator.py`), que es utilizado por los endpoints de IA. Se implementó la misma lógica de conversión de `UUID` a `string` para prevenir el error durante la creación de nuevos posts.
+
+*   **Implementada Salvaguarda de API para Generación de Imágenes:**
+    *   Se añadió una validación en el endpoint `POST /api/v1/ai/posts/{post_id}/generate-image`.
+    *   Ahora la API comprueba el `content_type` del post antes de generar una imagen. Si el tipo no es `image`, la API devuelve un error `400 Bad Request`, previniendo que se generen imágenes para posts de solo texto y proveyendo un feedback claro al cliente.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## [No Lanzado] - 2025-06-05
+
+### ✨ Nuevas Características y Mejoras Funcionales (Backend)
+
+*   **Endpoint para Subida de Previsualizaciones de Usuario por Backend (`POST /api/v1/posts/{post_id}/upload-wip-preview`):**
+    *   Se implementó un nuevo endpoint que permite al frontend enviar un archivo de imagen. El backend se encarga de:
+        *   Validar el archivo (tipo, y preparación para validación de tamaño).
+        *   Limpiar la carpeta `/wip/` del post en el bucket `post.previews`.
+        *   Subir la nueva imagen de previsualización a la carpeta `/wip/` usando la `service_role_key` (evitando problemas de RLS para la subida del frontend a esta ubicación temporal).
+    *   Devuelve una `GeneratePreviewImageResponse` con los detalles de la imagen en `/wip/`, similar al endpoint de generación IA.
+    *   Esto simplifica la lógica del frontend para las previsualizaciones subidas por el usuario.
+
+*   **Clarificación de Flujos de Creación de Posts con Imágenes:**
+    *   Se confirmó que la creación de posts (`POST /api/v1/posts/`) no acepta imagen inicial; la imagen se asocia mediante un `PATCH` posterior con `media_url` y `media_storage_path` después de que el FE sube la imagen a la ubicación final en `post_media`.
+    *   Se detalló el flujo para que el FE maneje la creación de posts en lote (para múltiples redes) manteniendo consistencia de título e imagen, utilizando el `PATCH` para asignar la imagen final a cada post.
+
+*   **Preparación para Tono de Voz y Longitud de Contenido en IA:**
+    *   Se planificó la modificación de los endpoints de IA (específicamente el que genera texto para posts, como `POST /api/v1/ai/generate-single-image-caption`) para aceptar parámetros `voice_tone` y `content_length_preference` en el payload. (Implementación de esta lógica en los prompts de IA y modelos de request pendiente o en curso).
+
+*   **Asignación de `generation_group_id`:**
+    *   Se confirmó que el endpoint `PATCH /api/v1/posts/{post_id}` puede actualizar el campo `generation_group_id` si se incluye en el payload (asumiendo que el modelo `PostUpdate` lo permite).
+    *   Se discutieron opciones para que el FE asigne este ID a posts creados en lote (ya sea en cada creación o mediante `PATCH`es individuales).
+
+### 🛠 Mejoras y Cambios Técnicos (Backend)
+
+*   **Manejo de `async/await` con `supabase-py` (DB y Storage):**
+    *   Se identificó que varios métodos del SDK de `supabase-py` v2.15.1 (como `.execute()` para DB después de ciertos constructores, y `.upload()`, `.list()`, `.remove()` para Storage) se comportan de manera síncrona en el entorno actual o devuelven objetos no directamente "awaitables".
+    *   Se aplicó consistentemente la eliminación de `await` para las llamadas directas a `.execute()` de la base de datos.
+    *   Se aplicó `asyncio.to_thread` a las llamadas síncronas del SDK de Supabase Storage (`.upload()`, `.list()`, `.remove()`) dentro de las funciones `async def` del `storage_service.py` para evitar el bloqueo del event loop de FastAPI y resolver `TypeError`s.
+
+*   **Depuración y Refinamiento de Políticas RLS para Supabase Storage:**
+    *   Se trabajó extensamente en la depuración de errores `403 Forbidden: new row violates RLS` y `500 DatabaseError` (con `sql_state_code: "42501"`) al intentar subir archivos desde el frontend al bucket `post.previews`.
+    *   Se identificó que la causa raíz probable es la falta de permisos `SELECT` para el rol `authenticated` en las tablas `public.organization_members` y/o `public.posts`, necesarios para que las subconsultas `EXISTS` dentro de las políticas RLS de `storage.objects` se ejecuten correctamente.
+    *   Se proveyeron y probaron políticas `GRANT SELECT` a nivel de columna y políticas RLS `FOR SELECT` más permisivas (temporalmente) en `organization_members` y `posts` para diagnosticar.
+    *   Se eliminó un error de "infinite recursion" en las políticas RLS de `organization_members` al simplificar la política `SELECT`.
+    *   Se crearon políticas `INSERT` y `UPDATE` específicas `TO supabase_storage_admin` para `storage.objects` en el bucket `post.previews` para asegurar que el rol del sistema pueda escribir físicamente si la política del usuario lo permite.
+
+*   **Ajustes en Routers (`posts.py`, `profiles.py`):**
+    *   Se corrigieron las firmas de varios endpoints en `posts.py` para usar `*` para keyword-only arguments, mejorando la compatibilidad con Pylance y la claridad.
+    *   Se aseguró que el endpoint `GET /api/v1/profiles/me` devuelva `organization_id` y `role` al frontend, tomándolos de `TokenData`.
+
+*   **Corrección de Errores de Importación y Nombres:**
+    *   Resueltos `ImportError` relacionados con `SupabaseClient` y `Client`.
+    *   Corregidos `NameError` y `AttributeError` por nombres incorrectos de modelos o funciones.
+
+### 🐛 Correcciones de Errores (Backend)
+
+*   Solucionado `RuntimeError: Form data requires "python-multipart" to be installed` al añadir la dependencia `python-multipart` para el manejo de subida de archivos en FastAPI.
+*   Resueltos múltiples `TypeError` relacionados con el uso incorrecto de `await` con métodos síncronos del SDK de `supabase-py`.
+*   Identificada la causa de errores `403 Forbidden: new row violates RLS` en la subida de storage desde el frontend, apuntando a la necesidad de permisos `SELECT` adecuados para el rol `authenticated` en tablas referenciadas por las políticas RLS de `storage.objects`. (Solución en progreso o aplicada).
+
+### ⚠️ Notas (Backend)
+
+*   La depuración de las políticas RLS para la subida directa de previsualizaciones por el usuario desde el frontend ha sido compleja. La solución de que el backend maneje estas subidas a `/wip/` proporciona un camino más robusto y controlado.
+*   Se recomienda una revisión y limpieza de la gestión de entornos virtuales y dependencias del proyecto para asegurar consistencia.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-06-04
 
 ### 🛠 Mejoras y Cambios Técnicos (Backend)

@@ -366,20 +366,30 @@ async def create_draft_post_from_ia(
     # Usar model_dump() para Pydantic v2, o .dict() para Pydantic v1
     try:
         if hasattr(post_create_data, 'model_dump'):
-            data_to_insert = post_create_data.model_dump(exclude_unset=True) # Pydantic v2
+            # Pydantic v2: Convertir a diccionario
+            raw_dict = post_create_data.model_dump(exclude_unset=True)
         else:
-            data_to_insert = post_create_data.dict(exclude_unset=True) # Pydantic v1
+            # Pydantic v1: Convertir a diccionario
+            raw_dict = post_create_data.dict(exclude_unset=True)
     except Exception as e_model_conv:
         logger.error(f"Error convirtiendo post_create_data a dict: {e_model_conv}")
         raise RuntimeError(f"Error interno preparando datos del post: {e_model_conv}")
 
-    # Añadir/Sobrescribir author_user_id y organization_id para asegurar que son los correctos del usuario autenticado
+    # --- INICIO DE LA CORRECCIÓN ---
+    # Preparamos el diccionario final que irá a la DB, convirtiendo UUIDs a strings
+    data_to_insert = {}
+    for key, value in raw_dict.items():
+        if isinstance(value, UUID):
+            data_to_insert[key] = str(value)
+        else:
+            data_to_insert[key] = value
+    # --- FIN DE LA CORRECCIÓN ---
+
+    # Añadir/Sobrescribir author_user_id y organization_id para asegurar que son los correctos
     data_to_insert['author_user_id'] = str(author_id)
     data_to_insert['organization_id'] = str(organization_id)
-    # Asegurar que el status es 'draft' si este endpoint siempre crea borradores
+    # Asegurar que el status es 'draft'
     data_to_insert['status'] = 'draft'
-
-    logger.debug(f"Datos a insertar para el post: {data_to_insert}")
 
     try:
         response = await asyncio.to_thread(
