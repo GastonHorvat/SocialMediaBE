@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import Optional, List, Dict
 from uuid import UUID 
 
+
 # -------------------------------------------------------------------------------------------------------------
 # Modelos para la Generación de IDEAS Y TITULOS DE CONTENIDO
 # -------------------------------------------------------------------------------------------------------------
@@ -86,7 +87,19 @@ class GeneratedTitlesResponse(BaseModel):
 class GenerateSingleImageCaptionRequest(BaseModel):
     """Petición para generar un caption para una publicación de imagen única."""
     
-    # --- NUEVOS CAMPOS AÑADIDOS ---
+    # --- CAMPOS DE OVERRIDE DEL USUARIO ---
+    voice_tone: Optional[str] = Field(
+        None, 
+        max_length=100, 
+        description="Tono de voz específico para esta generación. Si se proporciona, sobreescribe la configuración de la organización."
+    )
+    content_length: Optional[str] = Field(
+        None, 
+        max_length=100,
+        description="Preferencia de longitud para esta generación. Ejemplo: 'Corto', 'Medio (Ej: Post de Instagram/Facebook)'."
+    )
+ 
+    # --- CAMPOS DE CONTENIDO BASE ---
     title: Optional[str] = Field(
         None, 
         max_length=255,
@@ -95,8 +108,8 @@ class GenerateSingleImageCaptionRequest(BaseModel):
     prompt_id: Optional[UUID] = Field(None, description="ID del prompt de IA usado, si aplica.")
     generation_group_id: Optional[UUID] = Field(None, description="ID para agrupar varias generaciones de posts.")
     original_post_id: Optional[UUID] = Field(None, description="ID del post original si este es una variación.")
-    # --- FIN DE CAMPOS AÑADIDOS ---
-
+    
+    # --- CAMPOS DE CONTEXTO Y TRAZABILIDAD
     main_idea: Optional[str] = Field(
         None, 
         description="Idea principal, tema o mensaje clave que la imagen busca transmitir.",

@@ -2,8 +2,9 @@
 import base64
 import logging
 import uuid as uuid_pkg # Renombrado para evitar conflicto con el tipo UUID
-from typing import Optional, Tuple, Dict # Asegúrate que Dict esté
+from typing import Optional, Tuple, Dict, Any # Asegúrate que Dict esté
 from uuid import UUID # Tipo UUID para type hints
+
 
 # Importaciones de OpenAI (ajusta según tu configuración)
 from openai import AsyncOpenAI, APIConnectionError, RateLimitError, APIStatusError, OpenAIError
@@ -12,6 +13,7 @@ from app.core.config import settings # Para OPENAI_API_KEY y otras configuracion
 # Importaciones de Supabase y Servicios
 from app.db.supabase_client import SupabaseClient # Tipo para el cliente de Supabase
 from app.services import storage_service # Nuestro servicio de storage
+from app.services.ai_prompt_helpers import get_brand_identity_context
 
 # --- Configuración del Logger ---
 logger = logging.getLogger(__name__)
@@ -44,20 +46,25 @@ async def generate_image_base64_only(
     # Si quieres permitir que se sobrescriban por llamada, mantenlos como argumentos con default=None
     # y luego usa settings si el argumento es None.
     # Por simplicidad aquí, los quitamos de los argumentos y usamos settings directamente.
-) -> Tuple[Optional[str], Optional[str]]: # (base64_image_string, error_message)
-    logger.info(f"Solicitud a OpenAI (base64_only) con prompt: '{prompt_text[:100]}...'")
+    style_context: Optional[str] = None # <-- NUEVO PARÁMETRO OPCIONAL
+) -> Tuple[Optional[str], Optional[str]]:
+    if style_context:
+        # Añadimos el contexto de estilo para influir en la imagen
+        final_prompt = f"{prompt_text}. Estilo visual: {style_context}."
+    
+    logger.info(f"Solicitud a OpenAI con prompt final: '{final_prompt[:150]}...'")
     try:
         client = get_openai_client()
         response = await client.images.generate(
             model=settings.OPENAI_IMAGE_MODEL,         # <--- USAR SETTINGS
-            prompt=prompt_text,
+            prompt=final_prompt,
             size=settings.OPENAI_IMAGE_SIZE,           # <--- USAR SETTINGS
             quality=settings.OPENAI_IMAGE_QUALITY,     # <--- USAR SETTINGS
             # style=settings.OPENAI_IMAGE_STYLE, # Si añades este setting
             n=1,
             response_format="b64_json"
         )
-        # ... (resto de la lógica de la función como antes, con tus manejadores de error) ...
+        # ... (resto de la lógica de la función con manejadores de error) ...
         if response.data and len(response.data) > 0 and response.data[0].b64_json:
             return response.data[0].b64_json, None
         # ... (Manejo de error si no hay b64_json)
@@ -159,30 +166,38 @@ async def generate_and_upload_ai_image_to_wip(
 async def generate_image_from_prompt(
     prompt_text: str,
     organization_id: UUID,
-    post_id: UUID, # Usado para construir el path final de la imagen
+    post_id: UUID,
     supabase_client: SupabaseClient,
-    # Opcional: parámetros para pasar a generate_image_base64_only
-    openai_model_name: str = "dall-e-3",
+    org_settings: Dict[str, Any], # Parámetro que ya añadimos
+    openai_model_name: str = "dall-e-3", # Estos son opcionales
     image_size: str = "1024x1024",
     image_quality: str = "standard"
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    # Retorna: (public_url_final, final_storage_path, error_message)
     """
     Genera una imagen usando IA, la sube a la ubicación FINAL en `post_media`,
     y devuelve la URL pública y la ruta de almacenamiento de la imagen final.
     """
-    logger.info(f"Iniciando generación de imagen IA para ubicación FINAL (post: {post_id}), prompt: '{prompt_text[:100]}...'")
+    logger.info(f"Iniciando generación de imagen IA para ubicación FINAL (post: {post_id})")
 
-    # Paso 1: Generar la imagen como Base64
+    # --- LÓGICA DE CONTEXTO ---
+    brand_context = get_brand_identity_context(org_settings)
+    # Creamos un string simple con el tono y la personalidad para el estilo visual
+    image_style_context = f"{brand_context.get('communication_tone', '')}, {brand_context.get('personality_tags_str', '')}"
+    # --- FIN LÓGICA DE CONTEXTO ---
+
+    # Paso 1: Generar la imagen como Base64, pasando el contexto
     b64_image_data, ai_error = await generate_image_base64_only(
         prompt_text=prompt_text,
+        style_context=image_style_context
     )
     
+    # Esta es la única llamada que necesitamos. El bloque duplicado se elimina.
+
     if ai_error or not b64_image_data:
         logger.error(f"Fallo en generate_image_base64_only para imagen FINAL (post {post_id}): {ai_error}")
         return None, None, ai_error or "La IA no devolvió datos de imagen base64."
 
-    # Paso 2: Decodificar Base64 a bytes y determinar tipo/extensión
+    # Paso 2: Decodificar Base64...
     try:
         image_bytes = base64.b64decode(b64_image_data)
         img_extension = "png"
@@ -191,12 +206,9 @@ async def generate_image_from_prompt(
     except (TypeError, ValueError) as e_decode:
         logger.error(f"Error decodificando imagen base64 para FINAL (post {post_id}): {e_decode}", exc_info=True)
         return None, None, "Error procesando datos de imagen generada (decodificación fallida)."
-    except Exception as e_unexp_decode:
-        logger.error(f"Error inesperado decodificando para FINAL (post {post_id}): {e_unexp_decode}", exc_info=True)
-        return None, None, "Error inesperado al decodificar imagen."
-
+    
+    # ... (El resto de la función (pasos 3 y 4) permanece igual) ...
     # Paso 3: Definir la ruta de almacenamiento FINAL en `post_media`
-    # El nombre del archivo debe ser único para evitar colisiones.
     unique_image_filename = f"{uuid_pkg.uuid4()}.{img_extension}"
     final_storage_path = storage_service.get_post_media_storage_path(
         organization_id=organization_id,

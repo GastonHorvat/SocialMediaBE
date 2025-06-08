@@ -1,17 +1,24 @@
 # app/services/ai_content_generator.py
-import google.generativeai as genai
-import json # Necesario para el parser si el LLM devolviera JSON, pero para delimitado no lo usamos directamente.
-import logging
-import asyncio # Para ejecutar llamadas síncronas en un hilo separado
 
+import logging
+import asyncio
+import google.generativeai as genai  # <-- LA LÍNEA QUE FALTABA
 from typing import List, Dict, Any, Optional
-from app.prompts import templates as prompt_templates
-from app.models.ai_models import GeneratedIdeaDetail
-from app.core.config import settings # Para la API Key si necesitamos reconfigurar
-from typing import Optional, Dict, Any, List  # Asegúrate de tener todas las importaciones necesarias
 from uuid import UUID
-from app.prompts import templates as prompt_templates # Importar al inicio del módulo
-from app.models.ai_models import GeneratedIdeaDetail, GenerateTitlesFromFullIdeaRequest
+
+# Importaciones de la aplicación
+from app.core.config import settings
+from app.prompts import templates as prompt_templates
+from app.models.ai_models import (
+    GeneratedIdeaDetail,
+    GenerateTitlesFromFullIdeaRequest,
+    GenerateSingleImageCaptionRequest
+)
+from app.services.ai_prompt_helpers import (
+    get_brand_identity_context,
+    get_stylistic_context,
+    get_formatting_context
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,57 +26,22 @@ logger = logging.getLogger(__name__)
 # --- NUEVA FUNCIÓN PARA CONSTRUIR PROMPT DE TÍTULOS ---
 def build_prompt_for_titles(
     org_settings: Dict[str, Any],
-    request_data: GenerateTitlesFromFullIdeaRequest # Usamos el nuevo modelo de petición
+    request_data: GenerateTitlesFromFullIdeaRequest
 ) -> str:
-    """
-    Construye un prompt para Gemini para generar títulos basados en una idea de contenido completa
-    y la configuración de la organización.
-    """
-    # print(f"DEBUG_BUILD_TITLES_PROMPT: org_settings: {org_settings}")
-    # print(f"DEBUG_BUILD_TITLES_PROMPT: request_data: {request_data}")
+    """Construye un prompt para generar títulos usando los helpers de contexto."""
+    context = get_brand_identity_context(org_settings)
 
-    # Extraer datos de org_settings con fallbacks
-    brand_name = org_settings.get('ai_brand_name', 'esta marca')
-    industry = org_settings.get('ai_brand_industry', 'su industria general')
-    audience = org_settings.get('ai_target_audience_description', 'su audiencia')
-    communication_tone = org_settings.get('ai_communication_tone', 'un tono efectivo')
-    
-    personality_tags_list = org_settings.get('ai_brand_personality_tags', [])
-    personality_tags_str = ", ".join(tag.strip() for tag in personality_tags_list if isinstance(tag, str) and tag.strip()) if personality_tags_list else "general"
-    
-    keywords_list = org_settings.get('ai_keywords_to_use', [])
-    keywords_str = ", ".join(keyword.strip() for keyword in keywords_list if isinstance(keyword, str) and keyword.strip()) if keywords_list else "temas relevantes"
-
-    # Extraer datos de request_data
-    full_content_idea_text = request_data.full_content_idea_text
-    
-    # Manejar target_social_network opcional
-    target_social_network_context = request_data.target_social_network if request_data.target_social_network else "múltiples redes sociales"
-    
-    number_of_titles_to_generate = request_data.number_of_titles # Ya tiene default 3 en el modelo Pydantic
+    context['full_content_idea_text'] = request_data.full_content_idea_text
+    context['target_social_network_context'] = request_data.target_social_network or "múltiples redes sociales"
+    context['number_of_titles'] = request_data.number_of_titles
 
     try:
         prompt_template_string = prompt_templates.GENERATE_TITLES_FROM_IDEA_V1
-        
-        prompt = prompt_template_string.format(
-            industry=industry,
-            brand_name=brand_name,
-            audience=audience,
-            communication_tone=communication_tone,
-            personality_tags_str=personality_tags_str,
-            keywords_str=keywords_str,
-            full_content_idea_text=full_content_idea_text,
-            target_social_network_context=target_social_network_context,
-            number_of_titles=number_of_titles_to_generate
-        )
-    except AttributeError:
-        print("ERROR_BUILD_TITLES_PROMPT: La plantilla 'GENERATE_TITLES_FROM_IDEA_V1' no se encontró.")
-        raise ValueError("Plantilla de prompt para títulos no encontrada.")
+        prompt = prompt_template_string.format(**context)
     except KeyError as e:
-        print(f"ERROR_BUILD_TITLES_PROMPT: Falta una clave en la plantilla o datos de formateo: {e}")
-        raise ValueError(f"Error al formatear la plantilla de prompt para títulos: clave {e} faltante.")
+        logger.error(f"Falta una clave en la plantilla de títulos: {e}")
+        raise ValueError(f"Error al formatear la plantilla de títulos: clave {e} faltante.")
     
-    # print(f"DEBUG_BUILD_TITLES_PROMPT: Prompt final (primeros 300):\n{prompt[:300]}...")
     return prompt.strip()
 
 # --- FIN NUEVA FUNCIÓN ---
@@ -88,54 +60,18 @@ def parse_lines_to_list(llm_response_text: str, max_items: Optional[int] = None)
     return items
 
 def build_prompt_for_ideas(org_settings: Dict[str, Any]) -> str:
-    """
-    Construye un prompt para Gemini para generar 3 ideas conceptuales para posts
-    basado en la configuración de la organización, usando una plantilla.
-    """
-    # --- LOG F: VERIFICAR ORG_SETTINGS RECIBIDOS EN EL SERVICIO ---
-    # print(f"DEBUG_BUILD_PROMPT_IDEAS: org_settings recibidos: {org_settings}") # Puedes activar este si es necesario
-
-    # Extraer y preparar los valores de org_settings con fallbacks descriptivos
-    # y usando los nombres de campo correctos de tu tabla organization_settings
-    brand_name = org_settings.get('ai_brand_name', 'esta marca/negocio')
-    industry = org_settings.get('ai_brand_industry', 'su industria/nicho')
-    audience = org_settings.get('ai_target_audience_description', 'su audiencia objetivo') # Nombre corregido
-    
-    # Para personality_tags y keywords, que son TEXT[] en la DB y List[str] en Pydantic/Python
-    personality_tags_list = org_settings.get('ai_brand_personality_tags', []) # Nombre corregido
-    personality_tags_str = ", ".join(tag.strip() for tag in personality_tags_list if isinstance(tag, str) and tag.strip()) if personality_tags_list else "un estilo general y amigable"
-    
-    keywords_list = org_settings.get('ai_keywords_to_use', []) # Nombre corregido
-    keywords_str = ", ".join(keyword.strip() for keyword in keywords_list if isinstance(keyword, str) and keyword.strip()) if keywords_list else "temas de interés general para la audiencia"
-
-    communication_tone = org_settings.get('ai_communication_tone', 'un tono neutral y útil')
+    """Construye un prompt para generar ideas usando los helpers de contexto."""
+    context = get_brand_identity_context(org_settings)
+    # Para la generación de ideas, también es útil el tono de la marca
+    context.update(get_stylistic_context(org_settings)) # No pasamos request_data
 
     try:
-        # Acceder a la plantilla importada
         prompt_template_string = prompt_templates.IDEA_GENERATION_V1     
-        prompt = prompt_template_string.format(
-            brand_name=brand_name,
-            industry=industry,
-            audience=audience,
-            communication_tone=communication_tone,
-            personality_tags_str=personality_tags_str,
-            keywords_str=keywords_str
-        )
-    except AttributeError:
-        # Esto pasaría si IDEA_GENERATION_V1 no está definido en app.prompts.templates
-        print("ERROR_BUILD_PROMPT_IDEAS: La plantilla 'IDEA_GENERATION_V1' no se encontró en app.prompts.templates.")
-        raise ValueError("Plantilla de prompt para ideas no encontrada.") # O devuelve un prompt por defecto muy genérico
+        prompt = prompt_template_string.format(**context)
     except KeyError as e:
-        print(f"ERROR_BUILD_PROMPT_IDEAS: Falta una clave en la plantilla IDEA_GENERATION_V1 o en los datos de formateo: {e}")
-        raise ValueError(f"Error al formatear la plantilla de prompt para ideas: clave {e} faltante.") from e
+        logger.error(f"Falta una clave en la plantilla de ideas: {e}")
+        raise ValueError(f"Error al formatear la plantilla de ideas: clave {e} faltante.")
     
-    # --- LOG G (Opcional pero útil para depurar el prompt final): ---
-    # print(f"DEBUG_BUILD_PROMPT_IDEAS: Prompt final construido (longitud: {len(prompt)}). Primeros 500 chars:\n{prompt[:500]}")
-    # if len(prompt) > 500:
-    # print("DEBUG_BUILD_PROMPT_IDEAS: ... (prompt continúa) ...")
-    # Para ver el prompt completo si es muy largo:
-    # print(f"DEBUG_BUILD_PROMPT_IDEAS_FULL:\n{prompt}")
-
     return prompt.strip()
 
 def parse_gemini_idea_titles(llm_response: str) -> List[str]:
@@ -203,36 +139,31 @@ def parse_delimited_text_to_ideas(llm_response_text: str) -> List[GeneratedIdeaD
 
     return parsed_ideas_list[:3] # Devolver hasta 3 ideas
 
-def build_prompt_for_single_image_caption(org_settings: Dict[str, Any], request_data: Any) -> str:
-    """Construye el prompt para generar caption de imagen única."""
-    # Asumiendo que 'request_data' es tu modelo Pydantic GenerateSingleImageCaptionRequest
-    from app.prompts.templates import GENERATE_SINGLE_IMAGE_CAPTION_V1 # Asumiendo plantilla
+def build_prompt_for_single_image_caption(
+    org_settings: Dict[str, Any],
+    request_data: GenerateSingleImageCaptionRequest # <-- Aseguramos que el parámetro está aquí
+) -> str:
+    """Construye el prompt para caption usando los helpers de contexto."""
+    context = {}
+    context.update(get_brand_identity_context(org_settings))
+    context.update(get_stylistic_context(org_settings, request_data))
+    context.update(get_formatting_context(org_settings))
 
-    brand_name = org_settings.get('ai_brand_name', 'N/A')
-    industry = org_settings.get('ai_brand_industry', 'N/A')
-    audience = org_settings.get('ai_target_audience', 'N/A')
-    communication_tone = org_settings.get('ai_communication_tone', 'neutral')
+    context['target_social_network'] = request_data.target_social_network
+    context['main_idea'] = request_data.main_idea or ''
+    context['image_description'] = request_data.image_description or ''
+    context['call_to_action'] = request_data.call_to_action or ''
+    context['additional_notes'] = request_data.additional_notes or ''
+
+    try:
+        prompt_template_string = prompt_templates.GENERATE_SINGLE_IMAGE_CAPTION_V1
+        prompt = prompt_template_string.format(**context)
+    except KeyError as e:
+        logger.error(f"Falta una clave en la plantilla de caption: {e}")
+        raise ValueError(f"Error al formatear la plantilla de caption: clave {e} faltante.")
     
-    personality_tags = org_settings.get('ai_personality_tags', [])
-    keywords = org_settings.get('ai_keywords', [])
-    personality_tags_str = ", ".join(personality_tags) if isinstance(personality_tags, list) else str(personality_tags)
-    keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-
-    prompt = GENERATE_SINGLE_IMAGE_CAPTION_V1.format(
-        brand_name=brand_name,
-        industry=industry,
-        audience=audience,
-        communication_tone=communication_tone,
-        personality_tags_str=personality_tags_str,
-        keywords_str=keywords_str,
-        target_social_network=getattr(request_data, 'target_social_network', 'N/A'),
-        main_idea=getattr(request_data, 'main_idea', ''),
-        image_description=getattr(request_data, 'image_description', ''),
-        call_to_action=getattr(request_data, 'call_to_action', ''),
-        additional_notes=getattr(request_data, 'additional_notes', '')
-    )
-    logger.debug(f"Prompt para caption construido: {prompt[:200]}...")
-    return prompt
+    logger.debug(f"Prompt para caption construido (primeros 300 chars): {prompt[:300]}...")
+    return prompt.strip()
 
 def parse_title_and_caption_from_llm(llm_response: str) -> Dict[str, Optional[str]]:
     """Parsea la respuesta del LLM para extraer título y caption."""

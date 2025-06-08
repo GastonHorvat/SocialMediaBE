@@ -2,16 +2,50 @@
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+## [No Lanzado] - 2025-06-08
+
+### 🚀 Mejoras de Arquitectura y Refactorización 
+
+*   **Centralización de la Lógica de Contexto de IA con `ai_prompt_helpers.py`:**
+    *   Se ha creado un nuevo módulo de servicio, `app/services/ai_prompt_helpers.py`, para centralizar toda la lógica de construcción de contexto para los prompts de IA.
+    *   Este nuevo servicio encapsula la fusión de la configuración base de la organización (`org_settings`) con las preferencias específicas del usuario para una generación (`request_data`), como el tono de voz o la longitud del contenido.
+    *   Se han definido helpers granulares (`get_brand_identity_context`, `get_stylistic_context`, `get_formatting_context`) para permitir que cada servicio de IA consuma solo el contexto que necesita, promoviendo un código más limpio y eficiente.
+
+*   **Refactorización Completa de los Servicios de IA:**
+    *   El servicio `ai_content_generator.py` ha sido completamente refactorizado para utilizar los nuevos helpers de `ai_prompt_helpers.py`. Esto elimina la duplicación de código y asegura una construcción de prompts consistente para la generación de ideas, títulos y captions.
+    *   El servicio `ai_image_generator.py` también ha sido refactorizado para usar `get_brand_identity_context`, permitiendo que la identidad de la marca (tono, personalidad) influya en el estilo visual de las imágenes generadas por DALL-E.
+
+*   **Desacoplamiento y Escalabilidad Mejorada:**
+    *   La nueva arquitectura desacopla los servicios de generación de texto e imagen de la lógica de construcción de contexto. Esto previene importaciones circulares y prepara el sistema para la fácil integración de futuros servicios de IA (ej. `ai_video_generator.py`).
+
+### ✨ Nuevas Características y Mejoras Funcionales 
+
+*   **Implementación de Preferencias de Usuario por Generación:**
+    *   El backend ahora acepta y procesa las preferencias de "Tono de voz" y "Longitud del contenido" enviadas desde el frontend para una generación de contenido específica.
+    *   Se ha implementado la lógica para que estas preferencias del usuario sobreescriban la configuración por defecto de la organización, dando un control más granular sobre el resultado de la IA.
+    *   Se ha mejorado la lógica de los prompts para que las directivas sobre hashtags y emojis se basen en la configuración de la organización (`prefs_auto_hashtags_enabled`, etc.).
+
+### 🐛 Correcciones de Errores 
+
+*   **Solucionados Errores de Importación y Definición (`NameError`):**
+    *   Se han corregido múltiples errores de `NameError` (reportados por Pylance como `reportUndefinedVariable`) en los servicios de IA, causados por importaciones faltantes o incorrectas (ej. `genai`, `Any`, `GenerateSingleImageCaptionRequest`).
+    *   Se ha limpiado y unificado el bloque de importaciones en `ai_content_generator.py` para mejorar la legibilidad y prevenir futuros errores.
+
+*   **Corregida Lógica Duplicada en Generación de Imágenes:**
+    *   Se eliminó un bloque de código duplicado en la función `generate_image_from_prompt` que causaba que el contexto de estilo de la marca no se aplicara correctamente.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-06-07
 
-### ✨ Nuevas Características y Mejoras Funcionales (Backend)
+### ✨ Nuevas Características y Mejoras Funcionales 
 
 *   **Respeto por el Título del Usuario en Generación de Captions (`POST /api/v1/ai/generate-single-image-caption`):**
     *   Se implementó una nueva lógica de negocio para priorizar el título proporcionado por el usuario.
     *   Si el payload de la petición incluye un `title`, este se usará para crear el post. El título generado por la IA solo se usará como fallback si el usuario no proveyó uno.
     *   Se actualizó el modelo Pydantic `GenerateSingleImageCaptionRequest` para aceptar formalmente los campos `title`, `prompt_id`, `generation_group_id` y `original_post_id`, permitiendo una creación de posts más rica y con mejor trazabilidad desde la UI.
 
-### 🛠 Mejoras y Cambios Técnicos (Backend)
+### 🛠 Mejoras y Cambios Técnicos 
 
 *   **Cambio Estratégico de Bucket de Almacenamiento para Medios:**
     *   Tras una depuración exhaustiva que reveló problemas de permisos persistentes e irresolubles en el bucket `content.flow.media`, se tomó la decisión estratégica de abandonarlo.
@@ -21,7 +55,7 @@
 *   **Refactorización del Endpoint de Perfil de Usuario (`GET /api/v1/profiles/me`):**
     *   Se corrigió una llamada a la API de Supabase en `profiles_router.py`, eliminando un `TypeError` que ocurría al llamar a `supabase.auth.admin.get_user_by_id()` con un argumento nombrado incorrecto.
 
-### 🐛 Correcciones de Errores (Backend)
+### 🐛 Correcciones de Errores 
 
 *   **Solucionado `TypeError: Object of type UUID is not JSON serializable`:**
     *   Se identificó y corrigió un bug crítico que causaba errores 500 al intentar enviar datos con campos de tipo `UUID` a Supabase.
@@ -37,7 +71,7 @@
 
 ## [No Lanzado] - 2025-06-05
 
-### ✨ Nuevas Características y Mejoras Funcionales (Backend)
+### ✨ Nuevas Características y Mejoras Funcionales 
 
 *   **Endpoint para Subida de Previsualizaciones de Usuario por Backend (`POST /api/v1/posts/{post_id}/upload-wip-preview`):**
     *   Se implementó un nuevo endpoint que permite al frontend enviar un archivo de imagen. El backend se encarga de:
@@ -58,7 +92,7 @@
     *   Se confirmó que el endpoint `PATCH /api/v1/posts/{post_id}` puede actualizar el campo `generation_group_id` si se incluye en el payload (asumiendo que el modelo `PostUpdate` lo permite).
     *   Se discutieron opciones para que el FE asigne este ID a posts creados en lote (ya sea en cada creación o mediante `PATCH`es individuales).
 
-### 🛠 Mejoras y Cambios Técnicos (Backend)
+### 🛠 Mejoras y Cambios Técnicos 
 
 *   **Manejo de `async/await` con `supabase-py` (DB y Storage):**
     *   Se identificó que varios métodos del SDK de `supabase-py` v2.15.1 (como `.execute()` para DB después de ciertos constructores, y `.upload()`, `.list()`, `.remove()` para Storage) se comportan de manera síncrona en el entorno actual o devuelven objetos no directamente "awaitables".
@@ -80,13 +114,13 @@
     *   Resueltos `ImportError` relacionados con `SupabaseClient` y `Client`.
     *   Corregidos `NameError` y `AttributeError` por nombres incorrectos de modelos o funciones.
 
-### 🐛 Correcciones de Errores (Backend)
+### 🐛 Correcciones de Errores 
 
 *   Solucionado `RuntimeError: Form data requires "python-multipart" to be installed` al añadir la dependencia `python-multipart` para el manejo de subida de archivos en FastAPI.
 *   Resueltos múltiples `TypeError` relacionados con el uso incorrecto de `await` con métodos síncronos del SDK de `supabase-py`.
 *   Identificada la causa de errores `403 Forbidden: new row violates RLS` en la subida de storage desde el frontend, apuntando a la necesidad de permisos `SELECT` adecuados para el rol `authenticated` en tablas referenciadas por las políticas RLS de `storage.objects`. (Solución en progreso o aplicada).
 
-### ⚠️ Notas (Backend)
+### ⚠️ Notas 
 
 *   La depuración de las políticas RLS para la subida directa de previsualizaciones por el usuario desde el frontend ha sido compleja. La solución de que el backend maneje estas subidas a `/wip/` proporciona un camino más robusto y controlado.
 *   Se recomienda una revisión y limpieza de la gestión de entornos virtuales y dependencias del proyecto para asegurar consistencia.
@@ -95,7 +129,7 @@
 
 ## [No Lanzado] - 2025-06-04
 
-### 🛠 Mejoras y Cambios Técnicos (Backend)
+### 🛠 Mejoras y Cambios Técnicos 
 
 *   **Ajustes en la Gestión de Configuración (`app/core/config.py`):**
     *   Se ha modificado la forma en que se cargan y se definen los valores por defecto para las configuraciones de OpenAI (modelo, tamaño, calidad de imagen). Ahora se prioriza la carga desde el archivo `.env`, y la clase `Settings` define estos campos como requeridos si no se proveen valores por defecto en el código, mejorando la claridad sobre las dependencias de configuración.
@@ -130,13 +164,13 @@
     *   **`profiles.py` (o donde esté `/profiles/me`):** Se realizaron ajustes para asegurar que el endpoint `GET /api/v1/profiles/me` devuelva `organization_id` y `role` (obtenidos de `TokenData`) al frontend, facilitando al cliente la construcción de rutas y la lógica de permisos.
     *   **`main.py`:** Se añadió la configuración de `CORSMiddleware` para manejar las solicitudes Cross-Origin del frontend y resolver errores de política CORS.
 
-### 🐛 Correcciones de Errores (Backend)
+### 🐛 Correcciones de Errores 
 
 *   Resueltos múltiples `TypeError`, `ImportError`, `NameError`, y `AttributeError` que surgieron durante la implementación y prueba de las nuevas funcionalidades de gestión de imágenes, relacionados con el manejo de `async/await` con `supabase-py`, la carga de configuraciones, y la definición/llamada de funciones y modelos.
 *   Corregido el error "Bucket not found" en Supabase Storage asegurando que los nombres de bucket en el código coincidan con los existentes en Supabase.
 *   Se está trabajando en resolver errores `500 (Internal Server Error)` provenientes de Supabase Storage relacionados con políticas RLS, asegurando que el rol `authenticated` tenga los permisos de `SELECT` necesarios en las tablas `public.organization_members` y `public.posts`.
 
-### ⚠️ Notas (Backend)
+### ⚠️ Notas 
 
 *   La interacción con `supabase-py` v2.15.1 en un entorno `async` ha requerido ajustes finos, tratando varias operaciones del SDK como síncronas y usando `asyncio.to_thread` cuando es necesario para el I/O de storage.
 *   La depuración de las políticas RLS de Supabase Storage para las subidas directas del frontend está en curso.

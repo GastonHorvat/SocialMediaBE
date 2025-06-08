@@ -264,67 +264,53 @@ class GenerateImageForPostRequestBody(BaseModel):
                 "la sube al almacenamiento, y actualiza el post con la URL de la imagen.",
     tags=["AI Image Generation", "Posts"]
 )
-async def generate_auto_image_for_post_endpoint( # Renombrado para reflejar que es "auto"
+async def generate_auto_image_for_post_endpoint(
     post_id: UUID = Path(..., description="El ID del post existente"),
-    # request_body: GenerateImageForPostRequestBody = Body(...), # <--- ELIMINAR ESTA LÍNEA
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
-    logger.info(f"Solicitud para generar imagen AUTOMÁTICA para post ID: {post_id} por usuario {current_user.user_id}")
+    logger.info(f"Solicitud para generar imagen AUTOMÁTICA para post ID: {post_id}")
     if not current_user.organization_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
 
-    # 1. Obtener el contenido del post (título, content_text, social_network)
-    post_data_for_image: Optional[Dict[str, Any]] = None
+    # 1. Obtener los datos del post
     try:
-        # Seleccionar los campos necesarios: title, content_text, social_network
-        post_res = supabase.table("posts") \
-            .select("title, content_text, social_network, organization_id") \
-            .eq("id", str(post_id)) \
-            .maybe_single() \
-            .execute()
-            
-        if not post_res.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado.")
-        if str(post_res.data['organization_id']) != str(current_user.organization_id): # Verificar pertenencia
+        post_res = supabase.table("posts").select("title, content_text, social_network, organization_id, content_type").eq("id", str(post_id)).single().execute()
+        if str(post_res.data['organization_id']) != str(current_user.organization_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El post no pertenece a su organización.")
-        post_data_for_image = post_res.data
-    except APIError as e_check_api:
-        logger.error(f"APIError obteniendo post {post_id} para prompt de imagen: {e_check_api.message}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Error de BD obteniendo datos del post.")
+        post_data = post_res.data
     except Exception as e_check:
-        logger.error(f"Error inesperado obteniendo post {post_id} para prompt de imagen: {e_check}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno obteniendo datos del post.")
+        logger.error(f"Error obteniendo post {post_id} para generar imagen: {e_check}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o error de acceso.")
 
-    # Extraer los datos necesarios para el prompt
-    post_title = post_data_for_image.get("title")
-    post_content = post_data_for_image.get("content_text", "") # Default a string vacío si es None
-    social_network = post_data_for_image.get("social_network", "una red social general") # Default
+    # 2. VALIDACIÓN DE TIPO DE CONTENIDO (que ya habíamos planeado)
+    if post_data.get("content_type") != "image":
+        logger.warning(f"Se intentó generar una imagen para el post {post_id} de tipo '{post_data.get('content_type')}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No se puede generar una imagen para este post porque no es de tipo 'image'."
+        )
+        
+    # 3. OBTENER SETTINGS DE LA ORGANIZACIÓN
+    org_settings = await get_organization_settings(current_user.organization_id, supabase)
 
-    if not post_content: # Si el contenido del post es vital para el prompt
-        logger.warning(f"Post {post_id} no tiene content_text para generar un prompt de imagen significativo.")
-        # Podrías usar solo el título o devolver un error si el contenido es crucial.
-        # Por ahora, la función build_dalle_prompt_from_post_data lo manejará con un excerpt="contenido no especificado".
-        # raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El contenido del post es necesario para generar la imagen y está vacío.")
-
-
-    # 2. Construir el prompt para DALL-E usando los datos del post
+    # 4. Construir el prompt para DALL-E
     dalle_prompt = build_dalle_prompt_from_post_data(
-        post_title=post_title,
-        post_content_text=post_content,
-        social_network=social_network
-        # Futuro: pasar org_settings aquí para influir en el estilo del prompt o de la imagen
+        post_title=post_data.get("title"),
+        post_content_text=post_data.get("content_text", ""),
+        social_network=post_data.get("social_network", "una red social")
     )
 
-    # 3. Llamar al servicio que genera la imagen con DALL-E, la sube y devuelve la URL
+    # 5. Llamar al servicio de generación de imagen (AHORA PASANDO ORG_SETTINGS)
     public_image_url, storage_path_final, error_msg = await generate_image_from_prompt(
-        prompt_text=dalle_prompt, # <--- USANDO EL PROMPT CONSTRUIDO
+        prompt_text=dalle_prompt,
         organization_id=current_user.organization_id,
         post_id=post_id,
-        supabase_client=supabase
+        supabase_client=supabase,
+        org_settings=org_settings # <-- ¡AQUÍ ESTÁ EL CAMBIO CLAVE!
     )
 
-    # 4. Manejo de errores y actualización del post (esta parte es igual que antes)
+    # 6. Manejo de errores y actualización del post (esta parte es igual que antes)
     if error_msg:
         logger.error(f"Fallo en generate_image_from_prompt para post {post_id} con prompt automático: {error_msg}")
         status_code_err = status.HTTP_502_BAD_GATEWAY
