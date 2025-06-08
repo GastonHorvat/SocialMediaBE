@@ -1,29 +1,41 @@
 # app/api/v1/routers/posts.py
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Path, File, UploadFile   
-from typing import List, Optional, Dict, Tuple
-from uuid import UUID
-from datetime import date, datetime # Quitar date si no se usa
-from enum import Enum
+# --------------------------------------------------------------------------- #
+# 1. LIBRERÍAS ESTÁNDAR DE PYTHON
+# --------------------------------------------------------------------------- #
+import logging
 import pytz
-import uuid as uuid_pkg # Para generar UUIDs para nombres de archivo
+from datetime import date, datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
+import uuid as uuid_pkg
 
-from app.models.post_models import ( # Importar nuevos modelos
-    PostCreate, PostUpdate, PostResponse,
-    GeneratePreviewImageRequest, GeneratePreviewImageResponse,
-    ConfirmWIPImageDetails
+# --------------------------------------------------------------------------- #
+# 2. LIBRERÍAS DE TERCEROS
+# --------------------------------------------------------------------------- #
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, status, UploadFile
+from postgrest.exceptions import APIError
+from pydantic import HttpUrl
+
+# --------------------------------------------------------------------------- #
+# 3. IMPORTACIONES DE LA APLICACIÓN
+# --------------------------------------------------------------------------- #
+from app.api.v1.dependencies.auth import TokenData, get_current_user
+from app.db.supabase_client import SupabaseClient, get_supabase_client
+from app.models.post_models import (
+    ConfirmWIPImageDetails,
+    ContentTypeEnum,
+    GeneratePreviewImageRequest,
+    GeneratePreviewImageResponse,
+    PostCreate,
+    PostResponse,
+    PostUpdate,
 )
-from app.db.supabase_client import get_supabase_client, SupabaseClient # Renombrar Client a SupabaseClient
-from app.api.v1.dependencies.auth import get_current_user, TokenData
-
-# NUEVAS IMPORTACIONES DE SERVICIOS
-from app.services import storage_service
-from app.services import ai_image_generator # Asumiendo que tu servicio se llama así
+from app.services import ai_image_generator, storage_service
 
 # --- CONFIGURACIÓN DEL LOGGER (ASEGÚRATE DE TENERLA) ---
 import logging
 logger = logging.getLogger(__name__)
-
-from postgrest.exceptions import APIError
 
 class DeletedFilterEnum(str, Enum):
     not_deleted = "not_deleted"
@@ -34,7 +46,7 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=List[PostResponse],
+    response_model=List[Dict[str, Any]],
     summary="Obtener Lista de Posts (con filtros avanzados)",
     description="Devuelve una lista de posts del usuario autenticado dentro de su organización, con opciones para filtrar.",
     tags=["Posts"],
@@ -98,11 +110,20 @@ async def get_posts(
         query = query.order("created_at", desc=True).limit(limit).offset(offset)
         response = query.execute()
 
-        posts_data = response.data
-        if posts_data:
-            return [PostResponse.model_validate(item) for item in posts_data]
-        else:
+        posts_data = response.data # Esto es una lista de diccionarios
+        if not posts_data:
             return []
+
+        # Enriquecemos los datos manualmente
+        for post in posts_data:
+            content_type_key = post.get('content_type')
+            if content_type_key:
+                try:
+                    post['content_type_display'] = ContentTypeEnum[content_type_key].value
+                except KeyError:
+                    post['content_type_display'] = content_type_key # Fallback
+        
+        return posts_data
 
     except Exception as e:
         print(f"Error fetching posts for user {author_id_str} in org {org_id_for_log}: {e}")
@@ -127,68 +148,81 @@ async def create_post(
     author_id_str: Optional[str] = None
     org_id_uuid: Optional[UUID] = None
     org_id_for_log: str = "None"
+@router.post(
+    "/",
+    response_model=PostResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear un Nuevo Post",
+    description="Crea un nuevo post asociado al usuario autenticado y su organización.",
+    tags=["Posts"]
+)
+async def create_post(
+    post_data: PostCreate,
+    current_user: TokenData = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_supabase_client)
+):
+    # --- VALIDACIÓN MANUAL DE content_type ---
+    try:
+        # Verificamos que el string del request es una clave válida en nuestro Enum
+        ContentTypeEnum[post_data.content_type]
+    except KeyError:
+        valid_options = [e.name for e in ContentTypeEnum]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Valor inválido para 'content_type'. Las opciones válidas son: {valid_options}"
+        )
+    # --- FIN DE VALIDACIÓN ---
+
+    author_id_str: Optional[str] = None
+    org_id_uuid: Optional[UUID] = None
+    org_id_for_log: str = "None"
 
     try:
         author_id_str = str(current_user.user_id)
         org_id_uuid = current_user.organization_id
 
-        if org_id_uuid:
-            org_id_for_log = str(org_id_uuid)
-        else:
+        if not org_id_uuid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No se puede crear el post: el usuario no está asociado a una organización activa."
             )
 
+        # Usamos el model_dump que ya tenías, que convierte el objeto Pydantic a dict
+        # y ahora `content_type` ya es un string validado ('IMAGE_POST', etc.)
         new_post_dict = post_data.model_dump(exclude_unset=True)
+        
+        # Aseguramos los IDs del autor y la organización
         new_post_dict["author_user_id"] = author_id_str
         new_post_dict["organization_id"] = str(org_id_uuid)
 
-        # --- CORRECCIÓN AQUÍ ---
-        # Paso 1: Insertar el nuevo post
-        # Por defecto, .insert().execute() con Supabase y PostgREST configurado con
-        # "Prefer: return=representation" debería devolver una lista con el registro insertado.
+        # Insertar el nuevo post
         insert_response = supabase.table("posts").insert(new_post_dict).execute()
         
-        # Verificar si la inserción fue exitosa y devolvió datos
         if not insert_response.data or not isinstance(insert_response.data, list) or len(insert_response.data) == 0:
-            print(f"ERROR_POST_CREATE: La inserción del post no devolvió datos. Respuesta: {insert_response}")
+            logger.error(f"ERROR_POST_CREATE: La inserción del post no devolvió datos. Payload: {new_post_dict}. Respuesta: {insert_response}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="No se pudo crear el post o no se obtuvieron los datos del post creado."
             )
         
-        # El registro insertado debería ser el primer (y único) elemento de la lista .data
         created_post_data_from_insert = insert_response.data[0]
         
-        # Validar con PostResponse. Si todos los campos necesarios están presentes
-        # en created_post_data_from_insert (incluyendo 'id', 'created_at', 'updated_at'
-        # que la DB debería generar), esto es suficiente.
-        try:
-            validated_post = PostResponse.model_validate(created_post_data_from_insert)
-            return validated_post
-        except Exception as val_err: # Error de validación Pydantic
-            print(f"ERROR_POST_CREATE: Error al validar datos del post insertado: {val_err}. Datos: {created_post_data_from_insert}")
-            # Si la validación falla, podría ser porque la respuesta del INSERT no tiene todos los campos
-            # que PostResponse espera (ej. si 'updated_at' no se devuelve explícitamente por alguna razón).
-            # En ese caso, un SELECT explícito podría ser necesario si confías más en él.
-            # Por ahora, asumimos que el INSERT devuelve suficiente info.
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error al procesar los datos del post creado."
-            )
-        # --- FIN DE LA CORRECCIÓN ---
+        # Validamos el resultado para la respuesta.
+        # Nuestro PostResponse ahora tiene el computed_field que añadirá `content_type_display`
+        validated_post = PostResponse.model_validate(created_post_data_from_insert)
+        return validated_post
 
     except HTTPException as http_exc:
+        # Re-lanzamos las excepciones HTTP que nosotros mismos generamos (como la 422)
         raise http_exc
-    except APIError as e: # Captura errores específicos de PostgREST/Supabase
-        print(f"ERROR_POST_CREATE: APIError creando post para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
+    except APIError as e:
+        logger.error(f"APIError creando post para user {author_id_str} en org {org_id_for_log}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # O un código más específico si APIError lo provee
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error de base de datos al crear el post: {e.message}"
         )
     except Exception as e:
-        print(f"ERROR_POST_CREATE: Excepción inesperada creando post para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}")
+        logger.error(f"Excepción inesperada creando post para user {author_id_str} en org {org_id_for_log}: {type(e).__name__} - {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ocurrió un error al crear el post: {str(e)}"
@@ -458,6 +492,17 @@ async def update_post_partial(
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
+        # --- VALIDACIÓN MANUAL AÑADIDA ---
+    # Solo validamos si el campo fue enviado en el payload del PATCH
+    if post_update_data.content_type is not None:
+        try:
+            ContentTypeEnum[post_update_data.content_type]
+        except KeyError:
+            valid_options = [e.name for e in ContentTypeEnum]
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Valor inválido para 'content_type'. Las opciones válidas son: {valid_options}"
+            )
     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     print("!!!! ESTOY EJECUTANDO ESTA VERSIÓN DEL PATCH !!!!")
     print(f"!!!! Payload recibido aquí: {post_update_data.model_dump_json(indent=2)}")
@@ -518,18 +563,23 @@ async def update_post_partial(
 
     # Iterar sobre los campos enviados por el cliente y construir el payload para la DB
     for key, value in raw_payload_from_client.items():
-        if key == "media_url":
-            if value is not None: # Si se envió una HttpUrl
-                db_update_payload[key] = str(value)
-            else: # Si se envió media_url: null
-                db_update_payload[key] = None
-        elif isinstance(value, UUID): # <--- ESTA ES LA LÍNEA MÁGICA
-            db_update_payload[key] = str(value) # Convertimos cualquier UUID a string
-        elif key == "confirm_wip_image_details":
-            pass # Este campo no va a la DB, se maneja por separado
+        if key == "confirm_wip_image_details":
+            # Ignoramos este campo, no va a la DB
+            continue
+        
+        if isinstance(value, UUID):
+            # Convertimos UUID a string
+            db_update_payload[key] = str(value)
+        elif isinstance(value, datetime):
+            # Convertimos datetime a string en formato ISO 8601 con zona horaria
+            db_update_payload[key] = value.isoformat()
+        elif isinstance(value, HttpUrl):
+            # Convertimos HttpUrl a string
+            db_update_payload[key] = str(value)
         else:
+            # Para todos los demás tipos (str, int, bool, None), los pasamos tal cual
             db_update_payload[key] = value
-            
+
     logger.debug(f"PATCH_LOG - Payload inicial para DB (después de model_dump y conversión de HttpUrl): {db_update_payload}")
     if 'confirm_wip_image_details' in db_update_payload: # Este campo no va a la DB
         del db_update_payload['confirm_wip_image_details']

@@ -19,7 +19,7 @@ from app.models.ai_models import (
     GenerateTitlesFromFullIdeaRequest, # <<< NUEVO MODELO DE PETICIÓN
     GeneratedTitlesResponse          # <<< NUEVO MODELO DE RESPUESTA
 )
-from app.models.post_models import PostResponse, PostCreate
+from app.models.post_models import PostResponse, PostCreate, ContentTypeEnum
 
 # Servicios de IA
 from app.services.ai_content_generator import (
@@ -194,45 +194,54 @@ async def generate_titles_from_idea_endpoint(
     description="Genera un título y un caption para una imagen, y guarda el resultado como un post borrador.",
     tags=["AI Content Generation - Text", "Posts"]
 )
-async def generate_caption_and_save_post_endpoint( # Renombrado
+async def generate_caption_and_save_post_endpoint(
     request_data: GenerateSingleImageCaptionRequest,
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client),
 ):
+    # --- VALIDACIÓN MANUAL DE content_type ---
+    try:
+        # Verificamos que el string del request es una clave válida en nuestro Enum
+        ContentTypeEnum[request_data.content_type]
+    except KeyError:
+        valid_options = [e.name for e in ContentTypeEnum]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Valor inválido para 'content_type'. Las opciones válidas son: {valid_options}"
+        )
+    # --- FIN DE VALIDACIÓN ---
+
     if not current_user.organization_id or not current_user.user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no activo en organización o ID de usuario faltante.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no activo o sin organización.")
 
     org_settings = await get_organization_settings(current_user.organization_id, supabase)
-    if not org_settings.get('ai_brand_name') or not org_settings.get('ai_brand_industry'):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Configuración de IA (nombre de marca, industria) incompleta.")
+    if not org_settings.get('ai_brand_name'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Configuración de IA incompleta.")
 
     prompt = build_prompt_for_single_image_caption(org_settings, request_data)
+    
     try:
         llm_full_response_text = await generate_text_with_gemini(prompt)
     except RuntimeError as e_gemini:
-        logger.error(f"RuntimeError desde LLM para caption: {e_gemini}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e_gemini))
     
     if not llm_full_response_text or not llm_full_response_text.strip():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="IA no pudo generar contenido para caption.")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="IA no pudo generar contenido.")
 
     parsed_content = parse_title_and_caption_from_llm(llm_full_response_text)
     generated_title = parsed_content.get("title")
     generated_caption = parsed_content.get("content_text")
 
-    if not generated_caption: # El caption es mandatorio
-        logger.error(f"Parseo de caption fallido. Raw: '{llm_full_response_text}'")
+    if not generated_caption:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="IA no generó el formato de caption esperado.")
 
-    # Decidir qué título usar, priorizando el del usuario.
     final_title = request_data.title if request_data.title and request_data.title.strip() else generated_title
 
     post_to_create = PostCreate(
-        title=final_title,  # Usamos el título final decidido
+        title=final_title,
         content_text=generated_caption.strip(),
         social_network=request_data.target_social_network,
-        content_type="image",
-        # Pasamos los IDs opcionales que vienen en la petición
+        content_type=request_data.content_type, # <-- CORREGIDO: Pasamos el string directamente
         prompt_id=request_data.prompt_id,
         generation_group_id=request_data.generation_group_id,
         original_post_id=request_data.original_post_id
@@ -246,7 +255,6 @@ async def generate_caption_and_save_post_endpoint( # Renombrado
         )
         return PostResponse.model_validate(newly_created_post_data)
     except RuntimeError as e_db:
-        logger.error(f"RuntimeError guardando post de caption: {e_db}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e_db))
 
 

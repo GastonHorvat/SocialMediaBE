@@ -1,8 +1,7 @@
 # app/models/ai_models.py
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 from typing import Optional, List, Dict
 from uuid import UUID 
-
 
 # -------------------------------------------------------------------------------------------------------------
 # Modelos para la Generación de IDEAS Y TITULOS DE CONTENIDO
@@ -98,6 +97,11 @@ class GenerateSingleImageCaptionRequest(BaseModel):
         max_length=100,
         description="Preferencia de longitud para esta generación. Ejemplo: 'Corto', 'Medio (Ej: Post de Instagram/Facebook)'."
     )
+
+    content_type: str = Field(
+        ..., 
+        description="El tipo de contenido. Debe ser una clave del Enum, ej: 'IMAGE_POST'."
+    )
  
     # --- CAMPOS DE CONTENIDO BASE ---
     title: Optional[str] = Field(
@@ -115,11 +119,6 @@ class GenerateSingleImageCaptionRequest(BaseModel):
         description="Idea principal, tema o mensaje clave que la imagen busca transmitir.",
         examples=["Lanzamiento de nuestro nuevo producto ecológico"]
     )
-    image_description: Optional[str] = Field(
-        None,
-        description="Breve descripción de lo que se ve en la imagen.",
-        examples=["Un primer plano de nuestro producto X en un entorno natural."]
-    )
     target_social_network: str = Field(
         ..., 
         description="Red social destino para esta publicación.",
@@ -136,23 +135,22 @@ class GenerateSingleImageCaptionRequest(BaseModel):
         examples=["Mencionar nuestra oferta especial de verano."]
     )
 
-    class Config:
-        from_attributes = True
-        model_config = {
-            "json_schema_extra": {
-                "examples": [
-                    {
-                        "title": "¡Nuestro Nuevo Ebook ya está Aquí!", # Ejemplo con el nuevo campo
-                        "main_idea": "Promocionar nuestro nuevo ebook sobre marketing digital.",
-                        "image_description": "Una persona leyendo un ebook en una tablet.",
-                        "target_social_network": "LinkedIn",
-                        "call_to_action": "Descarga tu copia gratuita (enlace en bio).",
-                        "additional_notes": "Enfocarse en los beneficios para pequeñas empresas.",
-                        "generation_group_id": "7118415c-ea3b-4926-97cd-9750e0b402d7" # Ejemplo con UUID
-                    }
-                ]
-            }
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "title": "¡Nuestro Nuevo Ebook ya está Aquí!",
+                    "content_type": "IMAGE_POST", # El ejemplo ahora usa la clave, como debe ser.
+                    "main_idea": "Promocionar nuestro nuevo ebook sobre marketing digital.",
+                    "target_social_network": "LinkedIn",
+                    "call_to_action": "Descarga tu copia gratuita (enlace en bio).",
+                    "additional_notes": "Enfocarse en los beneficios para pequeñas empresas.",
+                    "generation_group_id": "7118415c-ea3b-4926-97cd-9750e0b402d7"
+                }
+            ]
         }
+    )
 
 
 class SingleImageCaptionResponse(BaseModel): # Respuesta si solo devuelves el caption

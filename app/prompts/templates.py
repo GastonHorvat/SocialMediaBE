@@ -90,57 +90,40 @@ Ahora, basándote en la {full_content_idea_text} y todas las directrices, genera
 """
 
 # -------------------------------------------------------------------------------------------------------------
-# Prompt para generar el TÍTULO y CAPTION para una publicación de imagen única.
+# Prompt v2 para generar el TÍTULO y CAPTION, con directivas más fuertes.
 # -------------------------------------------------------------------------------------------------------------
 GENERATE_SINGLE_IMAGE_CAPTION_V1 = """
-Eres un copywriter experto en redes sociales, especializado en crear TÍTULOS atractivos y CAPTIONS persuasivos para publicaciones con imágenes.
+Eres un copywriter de élite para redes sociales. Tu tarea es generar un TÍTULO y un CAPTION siguiendo un conjunto de directivas muy estrictas. El incumplimiento de estas directivas se considera un fallo.
 
-**Contexto de la Marca:**
-- Nombre de la Marca/Negocio: "{brand_name}"
-- Industria/Nicho: "{industry}"
-- Audiencia Objetivo: "{audience}"
-- Tono de Comunicación General: "{communication_tone}"
-- Personalidad de Marca (tags): {personality_tags_str}
-- Palabras Clave Importantes para la Marca: {keywords_str}
+**PARTE 1: CONTEXTO GENERAL (Información sobre la marca)**
+- Nombre de la Marca: "{brand_name}"
+- Industria: "{industry}"
+- Audiencia Principal: "{audience}"
+- Personalidad de Marca (debe reflejarse en el texto): {personality_tags_str}
+- Palabras Clave de la Marca (a usar si encajan de forma natural): {keywords_str}
 
-**Información Específica para Este Post:**
+**PARTE 2: DATOS DEL POST ESPECÍFICO**
 - Red Social Destino: "{target_social_network}"
-- Idea Principal/Mensaje Clave del Post: "{main_idea}"
-- Descripción de la Imagen (si está disponible, si no, se generará contenido basado en la idea principal): "{image_description}"
-- Llamado a la Acción (CTA) Sugerido (si lo hay): "{call_to_action}"
+- Idea Principal del Post: "{main_idea}"
 - Notas Adicionales del Usuario: "{additional_notes}"
 
-**Tu Tarea:**
-Genera un TÍTULO atractivo y un CAPTION (texto descriptivo) para una publicación en redes sociales.
-El contenido debe estar primordialmente basado en la "Idea Principal/Mensaje Clave del Post" y el "Contexto de la Marca".
-Si se proporcionó una "Descripción de la Imagen", utilízala para asegurar que el texto sea coherente con el visual. Si la descripción es genérica o no está disponible, enfócate en desarrollar la "Idea Principal" de forma convincente.
+**PARTE 3: DIRECTIVAS DE ESTILO OBLIGATORIAS PARA ESTA GENERACIÓN**
+Estas son las reglas más importantes. Debes seguirlas al pie de la letra.
+- **TONO DE VOZ OBLIGATORIO:** {tone_instruction}
+- **LONGITUD DEL TEXTO OBLIGATORIA:** {length_instruction}
+- **DIRECTIVA DE HASHTAGS OBLIGATORIA:** {hashtag_instruction}
+- **DIRECTIVA DE EMOJIS OBLIGATORIA:** {emoji_instruction}
+- **DIRECTIVA DE CTA (CALL TO ACTION) OBLIGATORIA:** {call_to_action}
 
-El TÍTULO debe ser:
-- Conciso (idealmente menos de 10-15 palabras).
-- Captar la atención e incitar a leer el caption.
-- Reflejar la "Idea Principal".
+**PARTE 4: TU TAREA Y FORMATO DE SALIDA**
+1.  Genera un TÍTULO corto y magnético que capture la "Idea Principal del Post".
+2.  Genera un CAPTION que desarrolle la "Idea Principal", respetando ABSOLUTAMENTE TODAS las directivas de la PARTE 3.
+3.  Si la directiva de CTA ({call_to_action}) contiene un texto, DEBES incluirlo de forma natural en el caption. Si está vacía o dice 'No incluir', NO debes inventar un CTA.
+4.  El texto debe ser 100% coherente con el Tono de Voz, la Longitud, los Hashtags y los Emojis especificados en las directivas obligatorias.
 
-El CAPTION debe ser:
-1. Desarrollar la "Idea Principal" de forma clara y atractiva.
-2. Estar alineado con la identidad de la marca (tono, personalidad, palabras clave).
-3. Ser adecuado para la red social "{target_social_network}".
-4. Ser capaz de generar engagement (interacción).
-5. Si se proporcionó un CTA, intégralo de forma natural. Si no, considera si un CTA genérico apropiado (ej. "Más información", "Visita nuestra web") podría encajar o si es mejor omitirlo según el contexto.
-6. EVITA generar placeholders como "[Describir imagen aquí]" o frases que indiquen que no tienes la descripción de la imagen. Si no hay descripción específica, crea el mejor contenido posible basándote en la IDEA PRINCIPAL.
-
-**Instrucciones de Formato:**
-- Devuelve la respuesta en el siguiente formato EXACTO, sin ningún texto adicional antes o después:
+**FORMATO DE SALIDA ESTRICTO (No incluyas nada más):**
 TITULO: [Aquí el título generado]
 CAPTION: [Aquí el caption generado]
-
-- No generes hashtags ni emojis a menos que el tono ("{communication_tone}") o la personalidad ("{personality_tags_str}") lo sugieran muy fuertemente y de forma implícita. El foco principal es el texto del mensaje.
-- Escribe como si fueras el gestor de redes sociales de "{brand_name}".
-
-**Ejemplo de un buen output (solo como referencia de formato y estilo, no de contenido específico):**
-TITULO: Innovación que Transforma Tu Día
-CAPTION: Descubre cómo nuestra última solución puede simplificar tu rutina y potenciar tus resultados. Pensado para ti, que buscas {{beneficio clave}}. ✨ Más detalles en el link de nuestra bio. #Innovacion #{{PalabraClaveRelevante}}
-
-Ahora, genera el TÍTULO y el CAPTION para la solicitud descrita arriba.
 """
 
 # -------------------------------------------------------------------------------------------------------------

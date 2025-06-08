@@ -151,7 +151,6 @@ def build_prompt_for_single_image_caption(
 
     context['target_social_network'] = request_data.target_social_network
     context['main_idea'] = request_data.main_idea or ''
-    context['image_description'] = request_data.image_description or ''
     context['call_to_action'] = request_data.call_to_action or ''
     context['additional_notes'] = request_data.additional_notes or ''
 

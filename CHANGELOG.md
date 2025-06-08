@@ -4,35 +4,37 @@
 
 ## [No Lanzado] - 2025-06-08
 
-### 🚀 Mejoras de Arquitectura y Refactorización 
+### 🚀 Mejoras de Arquitectura y Refactorización
 
 *   **Centralización de la Lógica de Contexto de IA con `ai_prompt_helpers.py`:**
-    *   Se ha creado un nuevo módulo de servicio, `app/services/ai_prompt_helpers.py`, para centralizar toda la lógica de construcción de contexto para los prompts de IA.
-    *   Este nuevo servicio encapsula la fusión de la configuración base de la organización (`org_settings`) con las preferencias específicas del usuario para una generación (`request_data`), como el tono de voz o la longitud del contenido.
-    *   Se han definido helpers granulares (`get_brand_identity_context`, `get_stylistic_context`, `get_formatting_context`) para permitir que cada servicio de IA consuma solo el contexto que necesita, promoviendo un código más limpio y eficiente.
+    *   Se creó un nuevo módulo de servicio (`app/services/ai_prompt_helpers.py`) para centralizar la lógica de construcción de contexto para los prompts de IA.
+    *   Este servicio encapsula la fusión de la configuración de la organización con las preferencias específicas del usuario (ej. tono de voz, longitud), aplicando la lógica de negocio correcta.
+    *   Los servicios `ai_content_generator.py` y `ai_image_generator.py` fueron refactorizados para usar estos helpers, eliminando código duplicado y mejorando la consistencia y mantenibilidad.
 
-*   **Refactorización Completa de los Servicios de IA:**
-    *   El servicio `ai_content_generator.py` ha sido completamente refactorizado para utilizar los nuevos helpers de `ai_prompt_helpers.py`. Esto elimina la duplicación de código y asegura una construcción de prompts consistente para la generación de ideas, títulos y captions.
-    *   El servicio `ai_image_generator.py` también ha sido refactorizado para usar `get_brand_identity_context`, permitiendo que la identidad de la marca (tono, personalidad) influya en el estilo visual de las imágenes generadas por DALL-E.
+*   **Estandarización de Tipos de Contenido (`ContentTypeEnum`):**
+    *   Se introdujo un `Enum` (`ContentTypeEnum`) como fuente única de verdad para los tipos de contenido, reemplazando el uso de strings genéricos.
+    *   Se implementó una estrategia de validación manual en los endpoints de entrada (`POST`, `PATCH`) para asegurar que solo se acepten las claves del `Enum` (ej. `IMAGE_POST`).
+    *   El modelo de respuesta `PostResponse` fue enriquecido con un campo calculado (`content_type_display`) para devolver el valor legible para humanos al frontend, mejorando la experiencia del desarrollador del FE.
 
-*   **Desacoplamiento y Escalabilidad Mejorada:**
-    *   La nueva arquitectura desacopla los servicios de generación de texto e imagen de la lógica de construcción de contexto. Esto previene importaciones circulares y prepara el sistema para la fácil integración de futuros servicios de IA (ej. `ai_video_generator.py`).
+### ✨ Nuevas Características y Mejoras Funcionales
 
-### ✨ Nuevas Características y Mejoras Funcionales 
+*   **Implementación Completa de Preferencias de Usuario por Generación:**
+    *   El backend ahora acepta y procesa correctamente las preferencias de "Tono de voz" y "Longitud del contenido" enviadas desde el frontend.
+    *   Se mejoraron las plantillas de prompts para dar mayor énfasis a estas directivas y aumentar la fiabilidad de la respuesta de la IA.
+    *   La lógica para incluir hashtags y emojis ahora respeta correctamente la configuración de la organización (`prefs_auto_hashtags_enabled`, etc.).
 
-*   **Implementación de Preferencias de Usuario por Generación:**
-    *   El backend ahora acepta y procesa las preferencias de "Tono de voz" y "Longitud del contenido" enviadas desde el frontend para una generación de contenido específica.
-    *   Se ha implementado la lógica para que estas preferencias del usuario sobreescriban la configuración por defecto de la organización, dando un control más granular sobre el resultado de la IA.
-    *   Se ha mejorado la lógica de los prompts para que las directivas sobre hashtags y emojis se basen en la configuración de la organización (`prefs_auto_hashtags_enabled`, etc.).
+### 🐛 Correcciones de Errores
 
-### 🐛 Correcciones de Errores 
+*   **Solucionado Error de Serialización de `datetime` y `UUID`:**
+    *   Se corrigió un `TypeError` crítico en el endpoint `PATCH /api/v1/posts/{post_id}` que ocurría al intentar actualizar campos de tipo `datetime` o `UUID`.
+    *   Se implementó una conversión explícita a string (`.isoformat()` para `datetime`, `str()` para `UUID`) antes de enviar el payload a la base de datos.
 
-*   **Solucionados Errores de Importación y Definición (`NameError`):**
-    *   Se han corregido múltiples errores de `NameError` (reportados por Pylance como `reportUndefinedVariable`) en los servicios de IA, causados por importaciones faltantes o incorrectas (ej. `genai`, `Any`, `GenerateSingleImageCaptionRequest`).
-    *   Se ha limpiado y unificado el bloque de importaciones en `ai_content_generator.py` para mejorar la legibilidad y prevenir futuros errores.
+*   **Solucionados Múltiples Errores de `NameError`:**
+    *   Se corrigieron errores de `NameError` en varios routers y servicios (`posts.py`, `ai_content_generator.py`, `ai_image_generator.py`) causados por importaciones faltantes o eliminadas incorrectamente durante la refactorización (ej. `logger`, `Any`, `HttpUrl`).
+    *   Se organizaron las importaciones siguiendo las convenciones de PEP 8 para mejorar la legibilidad.
 
-*   **Corregida Lógica Duplicada en Generación de Imágenes:**
-    *   Se eliminó un bloque de código duplicado en la función `generate_image_from_prompt` que causaba que el contexto de estilo de la marca no se aplicara correctamente.
+*   **Corregido `KeyError` en Plantillas de Prompt:**
+    *   Se solucionó un `KeyError` que ocurría al intentar formatear una plantilla de prompt que esperaba un placeholder (`{image_description}`) que ya no se proveía, eliminando la referencia de la plantilla.
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 

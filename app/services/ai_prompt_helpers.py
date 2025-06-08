@@ -53,19 +53,22 @@ def get_formatting_context(org_settings: Dict[str, Any]) -> Dict[str, str]:
     """
     context = {}
 
-    # Lógica Condicional para Hashtags
+ # --- Lógica de Hashtags MEJORADA ---
     if org_settings.get('prefs_auto_hashtags_enabled') is True:
+        # Obtenemos los detalles con valores por defecto seguros
         count = org_settings.get('prefs_auto_hashtags_count', 3)
-        strategy = org_settings.get('prefs_auto_hashtags_strategy', 'relevante')
-        context['hashtag_instruction'] = f"Incluye aproximadamente {count} hashtags, siguiendo una estrategia de '{strategy}'."
+        strategy = org_settings.get('prefs_auto_hashtags_strategy', 'relevantes para el contenido')
+        # Construimos una instrucción mucho más específica
+        context['hashtag_instruction'] = f"Incluye exactamente {count} hashtags. Los hashtags deben seguir una estrategia de tipo '{strategy}', siendo altamente relevantes para la 'Idea Principal del Post'."
     else:
-        context['hashtag_instruction'] = "No incluyas ningún hashtag."
+        context['hashtag_instruction'] = "No incluyas ningún hashtag en la respuesta."
+    # --- FIN de mejora ---
 
     # Lógica Condicional para Emojis
     if org_settings.get('prefs_auto_emojis_enabled') is True:
         style = org_settings.get('prefs_auto_emojis_style', 'sutil')
-        context['emoji_instruction'] = f"Incorpora emojis de forma {style}."
+        context['emoji_instruction'] = f"Incorpora emojis de forma {style} para complementar el mensaje."
     else:
-        context['emoji_instruction'] = "No incluyas ningún emoji."
+        context['emoji_instruction'] = "No incluyas ningún emoji en la respuesta."
         
     return context

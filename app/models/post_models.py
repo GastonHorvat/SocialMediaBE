@@ -1,8 +1,20 @@
 # app/models/post_models.py
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict # Importar ConfigDict
-from typing import Optional, List
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict, computed_field
+from typing import Optional, List, Dict, Any # Asegúrate que Any esté aquí
 from datetime import datetime
 from uuid import UUID
+from enum import Enum
+
+class ContentTypeEnum(str, Enum):
+    IMAGE_POST = "Imagen Única"
+    SHORT_TEXT_POST = "Texto Breve"
+    CAROUSEL = "Carrusel"
+    VERTICAL_VIDEO = "Video Corto"
+    INFORMATIVE_VIDEO = "Video Informativo"
+    BLOG_ARTICLE = "Artículo"
+    TEXT_THREAD = "Hilo de Texto"
+    EXTERNAL_LINK = "Publicación con Enlace Externo"
+    INTERACTIVE_STORY = "Contenido Efímero Interactivo (Story/Snap)"
 
 # --- NUEVOS MODELOS PARA GESTIÓN DE IMÁGENES CON CARPETA /wip/ ---
 
@@ -64,30 +76,28 @@ class PostBase(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
     content_text: str
     social_network: str
-    content_type: str
+    content_type: str # <--- CAMBIAR 'str' POR 'ContentTypeEnum'
     media_url: Optional[HttpUrl] = None
     status: Optional[str] = 'draft'
     scheduled_at: Optional[datetime] = None
-    model_config = ConfigDict(extra='ignore') # Ignorar campos extra si vienen de la DB
+    model_config = ConfigDict(extra='ignore')
 
 class PostCreate(PostBase):
     prompt_id: Optional[UUID] = None
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
-    # model_config = ConfigDict(from_attributes=True) # Si es para input, no se necesita from_attributes
-    # from_attributes es para cuando creas el modelo desde un objeto ORM
-    # Para PostCreate que es un payload de request, no se necesita a menos que lo construyas de otra forma.
-    # Lo mismo para PostUpdate
+    
+    # Le añadimos la configuración explícitamente para asegurar la validación correcta
+    model_config = ConfigDict(
+    )
 
 class PostUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
     content_text: Optional[str] = None
     social_network: Optional[str] = None
-    content_type: Optional[str] = None
-    
+    content_type: Optional[str] = None 
     media_url: Optional[HttpUrl] = Field(None, description="URL pública de la nueva imagen principal, o null para borrar la actual.")
     media_storage_path: Optional[str] = Field(None, description="Ruta de almacenamiento (sin bucket) de la nueva imagen principal, o null para borrar la actual.")
-    
     status: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     prompt_id: Optional[UUID] = None
@@ -98,7 +108,9 @@ class PostUpdate(BaseModel):
         None,
         description="Detalles para confirmar una imagen de la carpeta 'wip' como la imagen principal del post."
     )
-    model_config = ConfigDict(extra='forbid') # Para payloads de request, 'forbid' es bueno
+    model_config = ConfigDict(
+        extra='forbid',
+    )
 
 class PostResponse(PostBase):
     id: UUID
@@ -114,4 +126,4 @@ class PostResponse(PostBase):
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
     
-    model_config = ConfigDict(from_attributes=True, extra='ignore') # Para respuestas desde la DB, from_attributes es clave
+    model_config = ConfigDict(from_attributes=True, extra='ignore')
