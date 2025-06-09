@@ -30,8 +30,15 @@ from app.models.post_models import (
     PostCreate,
     PostResponse,
     PostUpdate,
+    PostContentOverride, 
 )
 from app.services import ai_image_generator, storage_service
+
+# --------------------------------------------------------------------------- #
+# 4. IMPORTACIONES DE HELPERS DE OTROS MODULOS
+# --------------------------------------------------------------------------- #
+from app.api.v1.routers.ai_router import get_organization_settings
+from app.services.ai_content_generator import build_dalle_prompt_from_post_data
 
 # --- CONFIGURACIÓN DEL LOGGER (ASEGÚRATE DE TENERLA) ---
 import logging
@@ -377,9 +384,8 @@ async def soft_delete_post(
     "/{post_id}/generate-preview-image",
     response_model=GeneratePreviewImageResponse,
     summary="Generar Imagen de Previsualización con IA para WIP",
-    description="Genera una imagen usando IA basada en el contenido del post o un prompt customizado. "
-                "Limpia la carpeta 'wip' del post y guarda la nueva imagen allí.",
-    tags=["Posts - Image Management"] # Nueva tag para agrupar
+    description="Genera una imagen de IA. Puede usar el contenido del post guardado en la DB o un nuevo texto proporcionado (override).",
+    tags=["Posts - Image Management"]
 )
 async def generate_ia_preview_image_for_wip(
     request_data: GeneratePreviewImageRequest, 
@@ -388,91 +394,87 @@ async def generate_ia_preview_image_for_wip(
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client)
 ):
-    start_time_total = datetime.now()
-    logger.info(f"TIMING - [{start_time_total.isoformat()}] - INICIO generate_ia_preview_image_for_wip para post {post_id}, user {current_user.user_id}")
+    logger.info(f"Iniciando generación de preview IA para post {post_id}")
 
     if not current_user.organization_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no asociado a una organización activa.")
 
-    # 1. Obtener el post para verificar pertenencia y obtener contenido para prompt si es necesario
-    start_time_db_fetch = datetime.now()
-    try:
-        # SIN await para la llamada a DB (asumiendo comportamiento síncrono observado)
-        post_query_response = supabase.table("posts").select("id, title, content_text, organization_id").eq("id", str(post_id)).eq("organization_id", str(current_user.organization_id)).limit(1).execute()
-        
-        time_taken_db_fetch = datetime.now() - start_time_db_fetch
-        logger.info(f"TIMING - DB fetch para post {post_id} tomó: {time_taken_db_fetch.total_seconds():.4f}s")
+    # 1. Determinar la fuente del contenido para el prompt
+    title_para_prompt: Optional[str] = None
+    texto_para_prompt: Optional[str] = None
 
-        if not post_query_response.data:
-            logger.warning(f"Post {post_id} no encontrado o no pertenece a org {current_user.organization_id} para generar preview.")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o no pertenece a la organización.")
-        post_db_data = post_query_response.data[0]
-    except APIError as e:
-        time_taken_db_fetch_error = datetime.now() - start_time_db_fetch
-        logger.error(f"TIMING - DB Error obteniendo post {post_id} ({time_taken_db_fetch_error.total_seconds():.4f}s): {e.message}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al acceder a datos del post.")
+    if request_data.override_content:
+        # Caso 3: Usar datos frescos del payload (edición en vivo)
+        logger.info(f"Generando imagen para post {post_id} con contenido 'override' del frontend.")
+        title_para_prompt = request_data.override_content.title
+        texto_para_prompt = request_data.override_content.content_text
     
-    # 2. Determinar el prompt para la IA
-    prompt_text = request_data.custom_prompt
-    if not prompt_text: 
-        prompt_text_title = post_db_data.get("title", "")
-        prompt_text_content = post_db_data.get("content_text", "")[:200] # Primeros 200 chars
-        
-        if prompt_text_title and len(prompt_text_title.strip()) >= 5:
-            prompt_text = f"Una imagen para un post titulado: '{prompt_text_title}'. Contenido adicional: '{prompt_text_content}'"
-        elif prompt_text_content and len(prompt_text_content.strip()) >= 10:
-            prompt_text = f"Una imagen relacionada con el siguiente contenido: '{prompt_text_content}'"
-        else:
-            logger.warning(f"No se pudo generar prompt para post {post_id}. Título: '{prompt_text_title}', Contenido (extracto): '{prompt_text_content}'")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudo generar un prompt adecuado desde el post. Proporcione un prompt customizado o más contenido en el post.")
+    elif request_data.use_post_content_from_db:
+        # Casos 1 y 2: Leer de la base de datos
+        logger.info(f"Generando imagen para post {post_id} con contenido de la base de datos.")
+        try:
+            post_res = supabase.table("posts").select("title, content_text, organization_id").eq("id", str(post_id)).single().execute()
+            if str(post_res.data.get('organization_id')) != str(current_user.organization_id):
+                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acceso denegado al post.")
+            
+            title_para_prompt = post_res.data.get("title")
+            texto_para_prompt = post_res.data.get("content_text")
+        except Exception as e:
+            logger.error(f"Error obteniendo post {post_id} para generar imagen desde DB: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post no encontrado o error al acceder a sus datos.")
     
-    logger.info(f"Generando imagen IA para WIP (post {post_id}) con prompt: '{prompt_text[:100]}...'")
+    else:
+        # Si no se especifica ninguna de las dos opciones, es un error.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La petición es inválida. Debe proporcionar 'override_content' o establecer 'use_post_content_from_db' en true."
+        )
 
-    # 3. Limpiar la carpeta /wip/ del post ANTES de generar la nueva imagen
-    start_time_wip_cleanup = datetime.now()
+    # 2. Construir el prompt para DALL-E (usando la función de tu servicio de content_generator)
+    # Nota: aquí asumimos que social_network no es crucial para el prompt de la imagen. 
+    # Si lo fuera, también necesitaríamos obtenerlo.
+    dalle_prompt = build_dalle_prompt_from_post_data(
+        post_title=title_para_prompt,
+        post_content_text=texto_para_prompt or "",
+        social_network="general" # Usamos un valor genérico
+    )
+    
+    if not dalle_prompt or "El contenido del post no proporcionó detalles" in dalle_prompt:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay suficiente contenido (título o texto) para generar una imagen.")
+
+    logger.info(f"Generando imagen IA para WIP (post {post_id}) con prompt: '{dalle_prompt[:100]}...'")
+
+    # 3. Limpiar la carpeta WIP
     wip_folder_path = storage_service.get_wip_folder_path(current_user.organization_id, post_id)
     cleanup_success, cleanup_error = await storage_service.delete_all_files_in_folder(
         supabase_client=supabase, bucket_name=storage_service.POST_PREVIEWS_BUCKET, folder_path=wip_folder_path
     )
-    time_taken_wip_cleanup = datetime.now() - start_time_wip_cleanup
-    logger.info(f"TIMING - Limpieza de WIP para post {post_id} ({wip_folder_path}) tomó: {time_taken_wip_cleanup.total_seconds():.4f}s. Éxito: {cleanup_success}")
-
     if not cleanup_success:
-        # Loguear el error pero continuar; la subida a WIP usará upsert y sobrescribirá.
-        logger.warning(f"Fallo al limpiar WIP para post {post_id} antes de generar preview IA: {cleanup_error}")
+        logger.warning(f"Fallo al limpiar WIP para post {post_id}: {cleanup_error}. Continuando de todas formas...")
 
     # 4. Llamar al servicio de IA para generar y subir la imagen a WIP
-    start_time_ai_service = datetime.now()
+    # Petición: Necesito los org_settings aquí para pasarlos
+    org_settings = await get_organization_settings(current_user.organization_id, supabase) # <-- Añadimos esto
+    
     public_url, storage_path, extension, content_type, ai_upload_error = await ai_image_generator.generate_and_upload_ai_image_to_wip(
-        prompt_text=prompt_text, 
+        prompt_text=dalle_prompt, 
         organization_id=current_user.organization_id,
         post_id=post_id, 
-        supabase_client=supabase
+        supabase_client=supabase,
+        org_settings=org_settings # <-- Pasamos org_settings
     )
-    time_taken_ai_service = datetime.now() - start_time_ai_service
-    logger.info(f"TIMING - Servicio ai_image_generator.generate_and_upload_ai_image_to_wip para post {post_id} tomó: {time_taken_ai_service.total_seconds():.4f}s")
 
     if ai_upload_error or not all([public_url, storage_path, extension, content_type]):
         logger.error(f"Error en generate_and_upload_ai_image_to_wip para post {post_id}: {ai_upload_error}")
-        status_code_err = status.HTTP_502_BAD_GATEWAY
-        if ai_upload_error and ("bloqueado" in ai_upload_error.lower() or "política de contenido" in ai_upload_error.lower()):
-            status_code_err = status.HTTP_400_BAD_REQUEST
-        
-        time_taken_total_error = datetime.now() - start_time_total
-        logger.info(f"TIMING - [{datetime.now().isoformat()}] - ERROR en generate_ia_preview_image_for_wip para post {post_id}. Total: {time_taken_total_error.total_seconds():.4f}s")
-        raise HTTPException(status_code=status_code_err, detail=f"Error al generar o guardar imagen de previsualización: {ai_upload_error or 'Datos de imagen inválidos.'}")
+        # ... (manejo de errores como lo tenías) ...
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error al generar o guardar imagen: {ai_upload_error}")
 
-    response_payload = GeneratePreviewImageResponse(
+    return GeneratePreviewImageResponse(
         preview_image_url=public_url, 
         preview_storage_path=storage_path,
         preview_image_extension=extension, 
         preview_content_type=content_type
     )
-    
-    time_taken_total_success = datetime.now() - start_time_total
-    logger.info(f"TIMING - [{datetime.now().isoformat()}] - ÉXITO generate_ia_preview_image_for_wip para post {post_id}. Total: {time_taken_total_success.total_seconds():.4f}s. URL: {public_url}")
-    
-    return response_payload
 
 # ================================================================================
 # SECCIÓN: MODIFICACIÓN DEL ENDPOINT PATCH PARA MANEJO DE IMÁGENES

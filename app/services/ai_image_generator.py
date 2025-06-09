@@ -42,15 +42,11 @@ def get_openai_client() -> AsyncOpenAI:
 # =======================================================================================
 async def generate_image_base64_only(
     prompt_text: str,
-    # Los parámetros ahora toman sus valores por defecto de settings
-    # Si quieres permitir que se sobrescriban por llamada, mantenlos como argumentos con default=None
-    # y luego usa settings si el argumento es None.
-    # Por simplicidad aquí, los quitamos de los argumentos y usamos settings directamente.
-    style_context: Optional[str] = None # <-- NUEVO PARÁMETRO OPCIONAL
+    style_context: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str]]:
+    final_prompt = prompt_text
     if style_context:
-        # Añadimos el contexto de estilo para influir en la imagen
-        final_prompt = f"{prompt_text}. Estilo visual: {style_context}."
+        final_prompt = f"{prompt_text}. Estilo visual: {style_context}"
     
     logger.info(f"Solicitud a OpenAI con prompt final: '{final_prompt[:150]}...'")
     try:

@@ -39,12 +39,24 @@ class ConfirmWIPImageDetails(BaseModel):
     )
     model_config = ConfigDict(extra='forbid') # No permitir campos extra
 
+class PostContentOverride(BaseModel):
+    """Contiene el texto de un post que aún no ha sido guardado en la DB."""
+    title: Optional[str] = Field(None, max_length=255)
+    content_text: Optional[str] = Field(None, description="El cuerpo del texto del post.")
+    model_config = ConfigDict(extra='forbid')
+
 class GeneratePreviewImageRequest(BaseModel):
-    custom_prompt: Optional[str] = Field(
+    """
+    Petición para generar una imagen de previsualización para un post.
+    Debe especificar una fuente de contenido: o desde la DB o un override directo.
+    """
+    use_post_content_from_db: bool = Field(
+        False,
+        description="Si es True, el backend usará el título y contenido del post ya guardado en la base de datos."
+    )
+    override_content: Optional[PostContentOverride] = Field(
         None,
-        max_length=4000,
-        description="Custom prompt for AI image generation. If None, "
-                    "the backend will attempt to generate a prompt from post content."
+        description="Proporciona el contenido de texto actual del editor del frontend. Se usará esto en lugar de los datos de la DB."
     )
     model_config = ConfigDict(extra='forbid')
 
