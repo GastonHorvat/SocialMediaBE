@@ -1,5 +1,5 @@
 # app/api/v1/routers/profiles_router.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from typing import Optional, Dict, Any # Asegúrate de que Optional, Dict y Any estén aquí
 from uuid import UUID
 
@@ -27,9 +27,7 @@ async def get_current_user_profile(
     profile_data_from_db: Optional[dict] = None
     user_email_from_auth: Optional[str] = None # Renombrado para claridad
 
-    logger.info(f"PROFILE_ME - Solicitando perfil para user_id: {user_id}, org_id: {current_user.organization_id}, role: {current_user.role}")
-
-    # --- Bloque 1: Obtener datos de la tabla 'profiles' ---
+        # --- Bloque 1: Obtener datos de la tabla 'profiles' ---
     try:
         # SIN await (asumiendo comportamiento síncrono de .execute() en tu entorno)
         profile_response = (
@@ -42,15 +40,12 @@ async def get_current_user_profile(
         
         if profile_response.data:
             profile_data_from_db = profile_response.data
-            logger.debug(f"PROFILE_ME - Datos de 'profiles' obtenidos para {user_id}: {profile_data_from_db}")
         # else: # No se encontró perfil en 'profiles', profile_data_from_db permanecerá None
 
     except APIError as e:
         if str(getattr(e, 'code', '')) == 'PGRST116': 
-             logger.warning(f"PROFILE_ME - No se encontró perfil único en 'profiles' para {user_id} (PGRST116).")
              profile_data_from_db = None 
         else:
-            logger.error(f"PROFILE_ME - APIError al obtener datos de 'profiles' para {user_id}: Code={getattr(e, 'code', 'N/A')}, Msg='{e.message}'", exc_info=True)
             profile_data_from_db = None 
     except Exception as e_profiles:
         logger.error(f"PROFILE_ME - Excepción inesperada al obtener datos de 'profiles' para {user_id}: {type(e_profiles).__name__} - {e_profiles}", exc_info=True)

@@ -88,11 +88,8 @@ async def get_current_user(
             first_membership = membership_response.data[0]
             user_organization_id = UUID(first_membership["organization_id"])
             user_role = first_membership["role"]
-            print(f"AUTH_LOGIC_INFO: Membresía encontrada para {user_uuid}: org_id={user_organization_id}, role={user_role}")
         else:
             status_code = getattr(membership_response, 'status_code', "N/A") # Para loguear si es inesperado
-            print(f"AUTH_LOGIC_INFO: No se encontró membresía en organization_members para {user_uuid} (data vacía/None tras .execute()). Status: {status_code}")
-            # user_organization_id y user_role permanecerán None, que es correcto.
 
     except APIError as api_exc: # Para errores de PostgREST (ej. tabla no existe, error de sintaxis, permisos si no fuera service_role)
         error_code = getattr(api_exc, 'code', '')

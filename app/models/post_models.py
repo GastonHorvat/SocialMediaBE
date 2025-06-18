@@ -6,15 +6,15 @@ from uuid import UUID
 from enum import Enum
 
 class ContentTypeEnum(str, Enum):
-    IMAGE_POST = "Imagen Única"
-    SHORT_TEXT_POST = "Texto Breve"
-    CAROUSEL = "Carrusel"
-    VERTICAL_VIDEO = "Video Corto"
-    INFORMATIVE_VIDEO = "Video Informativo"
-    BLOG_ARTICLE = "Artículo"
-    TEXT_THREAD = "Hilo de Texto"
-    EXTERNAL_LINK = "Publicación con Enlace Externo"
-    INTERACTIVE_STORY = "Contenido Efímero Interactivo (Story/Snap)"
+    IMAGE_POST = "IMAGE_POST"
+    SHORT_TEXT_POST = "SHORT_TEXT_POST"
+    CAROUSEL = "CAROUSEL"
+    VERTICAL_VIDEO = "VERTICAL_VIDEO"
+    INFORMATIVE_VIDEO = "INFORMATIVE_VIDEO"
+    BLOG_ARTICLE = "BLOG_ARTICLE"
+    TEXT_THREAD = "TEXT_THREAD"
+    EXTERNAL_LINK = "EXTERNAL_LINK"
+    INTERACTIVE_STORY = "INTERACTIVE_STORY"
 
 # --- NUEVOS MODELOS PARA GESTIÓN DE IMÁGENES CON CARPETA /wip/ ---
 
@@ -88,7 +88,7 @@ class PostBase(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
     content_text: str
     social_network: str
-    content_type: str # <--- CAMBIAR 'str' POR 'ContentTypeEnum'
+    content_type: ContentTypeEnum
     media_url: Optional[HttpUrl] = None
     status: Optional[str] = 'draft'
     scheduled_at: Optional[datetime] = None
@@ -98,8 +98,6 @@ class PostCreate(PostBase):
     prompt_id: Optional[UUID] = None
     generation_group_id: Optional[UUID] = None
     original_post_id: Optional[UUID] = None
-    
-    # Le añadimos la configuración explícitamente para asegurar la validación correcta
     model_config = ConfigDict(
     )
 

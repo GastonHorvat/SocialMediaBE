@@ -187,6 +187,13 @@ async def generate_titles_from_idea_endpoint(
 
 # --- FIN NUEVO ENDPOINT ---
 
+# app/api/v1/routers/ai_router.py
+
+# ... (importaciones al principio del archivo)
+from pydantic import ValidationError # Asegúrate de que esta importación esté
+
+# ... (otros endpoints)
+
 @router.post(
     "/generate-single-image-caption",
     response_model=PostResponse,
@@ -199,18 +206,6 @@ async def generate_caption_and_save_post_endpoint(
     current_user: TokenData = Depends(get_current_user),
     supabase: SupabaseClient = Depends(get_supabase_client),
 ):
-    # --- VALIDACIÓN MANUAL DE content_type ---
-    try:
-        # Verificamos que el string del request es una clave válida en nuestro Enum
-        ContentTypeEnum[request_data.content_type]
-    except KeyError:
-        valid_options = [e.name for e in ContentTypeEnum]
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Valor inválido para 'content_type'. Las opciones válidas son: {valid_options}"
-        )
-    # --- FIN DE VALIDACIÓN ---
-
     if not current_user.organization_id or not current_user.user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario no activo o sin organización.")
 
@@ -237,17 +232,32 @@ async def generate_caption_and_save_post_endpoint(
 
     final_title = request_data.title if request_data.title and request_data.title.strip() else generated_title
 
-    post_to_create = PostCreate(
-        title=final_title,
-        content_text=generated_caption.strip(),
-        social_network=request_data.target_social_network,
-        content_type=request_data.content_type, # <-- CORREGIDO: Pasamos el string directamente
-        prompt_id=request_data.prompt_id,
-        generation_group_id=request_data.generation_group_id,
-        original_post_id=request_data.original_post_id
-    )
+    # --- INICIO DE LA CORRECCIÓN DE VALIDACIÓN ---
     try:
-        newly_created_post_data = await create_draft_post_from_ia(
+        # Pydantic v2 maneja la conversión de string a Enum automáticamente si coinciden.
+        # El problema probablemente estaba en cómo se pasaban los datos.
+        # Simplificamos y confiamos en el modelo, pero capturamos el error específico.
+        post_to_create = PostCreate(
+            title=final_title,
+            content_text=generated_caption.strip(),
+            social_network=request_data.target_social_network,
+            content_type=request_data.content_type, # Pasamos el string "IMAGE_POST" directamente
+            prompt_id=request_data.prompt_id,
+            generation_group_id=request_data.generation_group_id,
+            original_post_id=request_data.original_post_id
+        )
+    except ValidationError as e:
+        # Si Pydantic falla, es porque el valor del string no es un miembro válido del Enum.
+        logger.error(f"Fallo de validación de Pydantic al crear PostCreate: {e.errors()}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Valor de content_type inválido: '{request_data.content_type}'. "
+                   f"Valores válidos: {[member.value for member in ContentTypeEnum]}"
+        )
+    # --- FIN DE LA CORRECCIÓN ---
+
+    try:
+        newly_created_post_data = create_draft_post_from_ia(
             supabase_client=supabase,
             author_id=current_user.user_id,
             organization_id=current_user.organization_id,
@@ -292,11 +302,10 @@ async def generate_auto_image_for_post_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post con ID {post_id} no encontrado o error de acceso.")
 
     # 2. VALIDACIÓN DE TIPO DE CONTENIDO (que ya habíamos planeado)
-    if post_data.get("content_type") != "image":
-        logger.warning(f"Se intentó generar una imagen para el post {post_id} de tipo '{post_data.get('content_type')}'")
+    if post_data.get("content_type") != ContentTypeEnum.IMAGE_POST.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No se puede generar una imagen para este post porque no es de tipo 'image'."
+            detail=f"No se puede generar una imagen para este post porque no es de tipo '{ContentTypeEnum.IMAGE_POST.value}'."
         )
         
     # 3. OBTENER SETTINGS DE LA ORGANIZACIÓN

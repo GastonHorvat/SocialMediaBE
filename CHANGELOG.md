@@ -2,6 +2,93 @@
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+# Changelog
+
+## [No Lanzado] - 2025-06-17
+
+### ✨ Nuevas Características y Mejoras Funcionales
+
+*   **Implementado Flujo de Conexión OAuth 2.0 para LinkedIn:**
+    *   Se ha desarrollado la arquitectura completa para que los usuarios conecten sus cuentas de LinkedIn. El flujo sigue el estándar **Authorization Code Grant con PKCE**, asegurando la máxima seguridad para una aplicación SPA.
+    *   **Estado de la Implementación:** El flujo de autorización (`/connect` y `/callback`) está **técnicamente completado y validado hasta el punto de la autorización del usuario**. Actualmente se encuentra bloqueado por un error `401 invalid_client` por parte de la API de LinkedIn, indicando un problema de configuración o de estado de la aplicación en el portal de desarrolladores de LinkedIn, no un fallo en el código.
+
+*   **Gestión de Conexiones Sociales desde la API:**
+    *   Se han añadido los endpoints `GET /api/v1/connections` y `DELETE /api/v1/connections/{id}` para que la interfaz de usuario pueda listar y eliminar las conexiones sociales de una organización, proporcionando un ciclo de vida completo para la gestión de integraciones.
+
+### 🛠 Mejoras y Cambios Técnicos
+
+*   **Arquitectura de Estado OAuth Robusta (Basada en DB):**
+    *   Se implementó una estrategia de gestión de estado **stateless** para el flujo OAuth. En lugar de depender de cookies de sesión frágiles, el `state` y el `code_verifier` (PKCE) se persisten temporalmente en una tabla `oauth_states` en la base de datos.
+    *   Este patrón es a prueba de redirecciones, previene ataques CSRF de forma robusta y elimina por completo los problemas de `CookieNotFound` que experimentamos.
+
+*   **Refactorización del Flujo OAuth para Arquitectura SPA+API:**
+    *   Se re-arquitecturó el endpoint `/connect` para seguir el patrón correcto de API + SPA. El backend ahora construye la `authorization_url` manualmente y la devuelve en un cuerpo JSON, dando control total al frontend sobre la redirección y eliminando los errores de CORS.
+
+*   **Centralización de Clientes OAuth:**
+    *   Se ha creado un módulo `app/core/oauth_clients.py` para centralizar la configuración de todos los clientes de API de terceros (`authlib`), mejorando la mantenibilidad y rompiendo dependencias circulares.
+
+*   **Seguridad y Consistencia en la Capa de Acceso a Datos:**
+    *   Se realizó una auditoría y refactorización para asegurar el uso correcto de `async/await` en toda la aplicación. Las funciones de servicio que interactúan con la base de datos (usando `supabase-py` síncrono) son ahora correctamente `def`, mientras que los endpoints del router y las llamadas de red (`httpx`) son `async def`, eliminando una clase entera de errores `TypeError` y `RuntimeWarning`.
+
+*   **Estrategia de Encriptación de Tokens en el Backend:**
+    *   Se ha establecido y consolidado una política clara donde los tokens de acceso y refresco (cuando se obtengan) se encriptarán y desencriptarán exclusivamente en la capa de la aplicación (Python) usando la librería `cryptography`, asegurando que los datos sensibles nunca se almacenen en texto plano en la base de datos.
+
+### 🐛 Correcciones de Errores
+
+*   **Solucionado Error de Validación `422 Unprocessable Content` en Creación de Posts:**
+    *   Se ha resuelto un bug crítico donde el backend fallaba al crear el segundo post en una generación múltiple.
+    *   La causa era un `ValidationError` de Pydantic. Se corrigió el endpoint `/ai/generate-single-image-caption` para validar y convertir explícitamente el `content_type` (string) recibido del frontend al `ContentTypeEnum` interno antes de crear el objeto `PostCreate`.
+
+*   **Resueltos Múltiples Errores de `ImportError` y `NameError`:**
+    *   Se han solucionado numerosos errores de importación y de nombres no definidos a lo largo de la refactorización, incluyendo la adición de archivos `__init__.py` faltantes y la corrección de rutas de importación, resultando en una base de código que ahora compila y se ejecuta de forma estable.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## [No Lanzado] - 2025-06-09
+
+### ✨ Nuevas Características y Mejoras Funcionales
+
+*   **Implementado Flujo Completo de Conexión y Publicación para LinkedIn:**
+    *   Se ha desarrollado la capacidad completa para que los usuarios conecten sus cuentas de LinkedIn de forma segura usando el flujo OAuth2 con PKCE.
+    *   La plataforma ahora puede publicar posts de texto y de imagen en nombre del usuario a través de una conexión autorizada.
+
+*   **Gestión de Conexiones Sociales desde la API:**
+    *   Se han añadido endpoints para que la interfaz de usuario pueda listar y eliminar las conexiones sociales de una organización, proporcionando un ciclo de vida completo para la gestión de integraciones.
+
+*   **Refresco Automático de Tokens de Acceso:**
+    *   Se ha implementado una lógica de "just-in-time" para refrescar automáticamente los tokens de acceso de LinkedIn que están a punto de expirar.
+    *   Esto garantiza la longevidad y robustez de las conexiones, mejorando drásticamente la experiencia del usuario al evitar la necesidad de re-autenticaciones manuales frecuentes.
+
+*   **Publicación de Posts con Imágenes en LinkedIn:**
+    *   Se ha extendido la funcionalidad de publicación para incluir soporte para imágenes. El sistema ahora maneja el flujo de subida de medios de 3 pasos de la API de LinkedIn de forma transparente.
+
+### 🛠 Mejoras y Cambios Técnicos
+
+*   **Arquitectura de Servicios de Publicación Modular y Escalable (Patrón Dispatcher):**
+    *   Se ha refactorizado la lógica de publicación. En lugar de llamar a servicios específicos de cada plataforma desde los routers, se ha creado un `publishing_service.py` que actúa como un "dispatcher".
+    *   Este servicio central determina la plataforma de destino y delega la tarea al servicio especialista correspondiente (`linkedin_service`, etc.). Esto simplifica enormemente la adición de nuevas plataformas en el futuro.
+
+*   **Implementada Seguridad a Nivel de Recurso (Multi-Tenancy):**
+    *   Se ha creado una nueva dependencia de FastAPI reutilizable (`get_valid_connection_for_user`) para proteger los endpoints.
+    *   Esta dependencia verifica que cualquier intento de usar una conexión social solo sea permitido si el usuario autenticado pertenece a la misma organización que la conexión, previniendo el acceso no autorizado a recursos entre tenants.
+
+*   **Estrategia de Encriptación de Tokens en el Backend:**
+    *   Se ha establecido una política clara donde los tokens de acceso y refresco se encriptan y desencriptan exclusivamente en la capa de la aplicación (Python) usando la librería `cryptography`. La base de datos solo almacena texto cifrado, mejorando la seguridad de los datos sensibles.
+
+*   **Refactorización y Creación de Módulos de API Dedicados:**
+    *   Se ha reorganizado la estructura del proyecto para una mayor claridad. La lógica de conexiones y publicación ahora reside en módulos dedicados (`connections_router.py`, `publishing_router.py`) dentro de una nueva subcarpeta `social`, separando la lógica de integración de la lógica de gestión de contenido principal.
+
+### 🐛 Correcciones de Errores
+
+*   **Resuelto Conflicto de Dependencias Crítico (`resolution-too-deep`):**
+    *   Se ha reestructurado y limpiado por completo el archivo `requirements.txt` para eliminar dependencias duplicadas, redundantes y de bajo nivel con versiones fijas.
+    *   Se ha establecido una estrategia de definir únicamente las dependencias de alto nivel, permitiendo que `pip` resuelva un árbol de dependencias consistente y estable, solucionando los fallos de instalación del entorno.
+
+*   **Solucionados Múltiples Errores de Importación en el Código:**
+    *   Se han corregido numerosos archivos (`connections_router.py`, `publishing_service.py`, etc.) que tenían importaciones faltantes o incorrectas, asegurando que todos los módulos sean autocontenidos y funcionales.
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 ## [No Lanzado] - 2025-06-08
 
 ### 🚀 Mejoras de Arquitectura y Refactorización

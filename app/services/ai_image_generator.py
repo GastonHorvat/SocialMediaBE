@@ -96,6 +96,7 @@ async def generate_and_upload_ai_image_to_wip(
     organization_id: UUID,
     post_id: UUID,
     supabase_client: SupabaseClient,
+    org_settings: dict
 
 ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
     # Retorna: (public_wip_url, wip_storage_path, wip_extension, wip_content_type, error_message)

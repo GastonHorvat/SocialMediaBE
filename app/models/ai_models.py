@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 from typing import Optional, List, Dict
 from uuid import UUID 
+from app.models.post_models import ContentTypeEnum
 
 # -------------------------------------------------------------------------------------------------------------
 # Modelos para la Generación de IDEAS Y TITULOS DE CONTENIDO
@@ -98,9 +99,9 @@ class GenerateSingleImageCaptionRequest(BaseModel):
         description="Preferencia de longitud para esta generación. Ejemplo: 'Corto', 'Medio (Ej: Post de Instagram/Facebook)'."
     )
 
-    content_type: str = Field(
+    content_type: ContentTypeEnum = Field(
         ..., 
-        description="El tipo de contenido. Debe ser una clave del Enum, ej: 'IMAGE_POST'."
+        description="El tipo de contenido del post. Debe ser un miembro del Enum ContentTypeEnum."
     )
  
     # --- CAMPOS DE CONTENIDO BASE ---

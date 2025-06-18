@@ -1,57 +1,54 @@
 # app/core/config.py
 import os
-# from dotenv import load_dotenv, find_dotenv # <--- QUITAR ESTAS LÍNEAS
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
-# --- YA NO LLAMAMOS A load_dotenv() EXPLÍCITAMENTE AQUÍ ---
-# dotenv_path = find_dotenv(...)
-# load_dotenv(...)
-
 # --- DEFINICIÓN DE SETTINGS CON PYDANTIC ---
 class Settings(BaseSettings):
+    # --- Metadatos del Proyecto ---
     PROJECT_NAME: str = "Social Media BE"
     API_V1_STR: str = "/api/v1"
+    # Añadimos un flag de debug para controlar el comportamiento 'secure' de las cookies
+    DEBUG: bool = True 
+    FRONTEND_URL: str = "http://localhost:5173" # Valor por defecto para desarrollo
 
-    # Supabase - Obligatorias
+    # --- Credenciales de APIs (Obligatorias, leídas del .env) ---
     SUPABASE_URL: str
     SUPABASE_KEY: str
     SUPABASE_JWT_SECRET: str
-
-    # Google Gemini - Obligatoria
-    GOOGLE_API_KEY: str
     
-    # OpenAI - Clave API - Obligatoria
+    GOOGLE_API_KEY: str
     OPENAI_API_KEY: str 
+    
+    LINKEDIN_CLIENT_ID: str
+    LINKEDIN_CLIENT_SECRET: str
+    LINKEDIN_REDIRECT_URI: str
+    
+    TOKENS_ENCRYPTION_KEY: str
 
-    # Configuraciones para Imágenes de OpenAI - Leídas desde .env
-    # Pydantic fallará al inicio si no están en .env
-    OPENAI_IMAGE_MODEL: str
-    OPENAI_IMAGE_SIZE: str
-    OPENAI_IMAGE_QUALITY: str
-
+    # --- Configuraciones con Valores por Defecto (si no están en .env) ---
+    OPENAI_IMAGE_MODEL: str = "dall-e-3"
+    OPENAI_IMAGE_SIZE: str = "1024x1024"
+    OPENAI_IMAGE_QUALITY: str = "standard"
+        
     model_config = SettingsConfigDict(
-        env_file=".env", # <--- Especificar el nombre del archivo .env directamente
-                         # pydantic-settings lo buscará en el directorio actual y superiores.
+        env_file=".env",
         env_file_encoding='utf-8',
-        extra='ignore',
-        # case_sensitive=False, # Default, las variables de entorno son case-insensitive en muchos sistemas
-                               # pero las claves en el archivo .env deben coincidir.
+        extra='ignore'
     )
 
 # --- INSTANCIACIÓN ---
 try:
     settings = Settings()
     
-    print("--- SETTINGS CARGADOS POR PYDANTIC (confiando en pydantic-settings para .env) ---")
+    # Log de verificación al inicio
+    print("--- SETTINGS CARGADOS CORRECTAMENTE ---")
     print(f"PROJECT_NAME: {settings.PROJECT_NAME}")
-    print(f"OPENAI_API_KEY: {'SET' if settings.OPENAI_API_KEY else 'NOT SET'}") # Para verificar que carga algo
-    print(f"OPENAI_IMAGE_MODEL: {settings.OPENAI_IMAGE_MODEL}")
-    print(f"OPENAI_IMAGE_SIZE: {settings.OPENAI_IMAGE_SIZE}")
-    print(f"OPENAI_IMAGE_QUALITY: {settings.OPENAI_IMAGE_QUALITY}")
-    print(f"-----------------------------------")
+    print(f"LINKEDIN_CLIENT_ID: {'SET' if settings.LINKEDIN_CLIENT_ID else 'NOT SET'}")
+    print(f"TOKENS_ENCRYPTION_KEY: {'SET' if settings.TOKENS_ENCRYPTION_KEY else 'NOT SET'}")
+    print("-----------------------------------")
 
 except Exception as e:
-    print(f"!!! ERROR CRÍTICO AL CARGAR SETTINGS CON PYDANTIC (config.py): {type(e).__name__} - {e}")
-    print("!!! Verifique que su archivo .env exista en la raíz del proyecto y contenga TODAS las variables requeridas.")
+    print(f"!!! ERROR CRÍTICO AL CARGAR SETTINGS (config.py): {type(e).__name__} - {e}")
+    print("!!! Verifique que su archivo .env exista y contenga TODAS las variables requeridas (SUPABASE_URL, LINKEDIN_CLIENT_ID, etc.).")
     raise

@@ -19,6 +19,12 @@ from app.services.ai_prompt_helpers import (
     get_stylistic_context,
     get_formatting_context
 )
+from app.models.post_models import PostCreate, ContentTypeEnum # <-- IMPORTACIONES NECESARIAS
+from app.services.ai_prompt_helpers import (
+    get_brand_identity_context,
+    get_stylistic_context,
+    get_formatting_context
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,69 +287,51 @@ async def generate_text_with_gemini(prompt: str, **kwargs) -> str:
 # --- Función para crear borrador de post (asumiendo que sigue aquí) ---
 # Esta función interactúa con Supabase, no directamente con el LLM para generar texto.
 
-async def create_draft_post_from_ia(
-    supabase_client: Any, # Debería ser SupabaseClient pero para evitar import circular si está en db
+def create_draft_post_from_ia(
+    supabase_client: Any,
     author_id: UUID,
     organization_id: UUID,
-    post_create_data: Any # Debería ser PostCreate
+    post_create_data: PostCreate
 ) -> Dict[str, Any]:
     """
-    Crea un borrador de post en la base de datos.
+    Crea un borrador de post, convirtiendo el Enum de content_type a su valor string
+    antes de la inserción en la base de datos.
     """
-    logger.info(f"Intentando crear borrador de post para org {organization_id} por autor {author_id}")
+    logger.info(f"Creando borrador para org {organization_id} por autor {author_id}")
     
-    # Convertir el modelo Pydantic a un diccionario para la inserción
-    # Usar model_dump() para Pydantic v2, o .dict() para Pydantic v1
-    try:
-        if hasattr(post_create_data, 'model_dump'):
-            # Pydantic v2: Convertir a diccionario
-            raw_dict = post_create_data.model_dump(exclude_unset=True)
-        else:
-            # Pydantic v1: Convertir a diccionario
-            raw_dict = post_create_data.dict(exclude_unset=True)
-    except Exception as e_model_conv:
-        logger.error(f"Error convirtiendo post_create_data a dict: {e_model_conv}")
-        raise RuntimeError(f"Error interno preparando datos del post: {e_model_conv}")
+    # Convierte el objeto Pydantic a un diccionario
+    raw_dict = post_create_data.model_dump(exclude_unset=True)
 
-    # --- INICIO DE LA CORRECCIÓN ---
-    # Preparamos el diccionario final que irá a la DB, convirtiendo UUIDs a strings
+    # --- CORRECCIÓN ARQUITECTÓNICA FINAL ---
+    # Si 'content_type' es un objeto Enum, extraemos su valor string (.value)
+    # que es lo que la base de datos espera.
+    if 'content_type' in raw_dict and isinstance(raw_dict['content_type'], ContentTypeEnum):
+        raw_dict['content_type'] = raw_dict['content_type'].value
+    # -----------------------------------
+    
     data_to_insert = {}
     for key, value in raw_dict.items():
         if isinstance(value, UUID):
             data_to_insert[key] = str(value)
         else:
             data_to_insert[key] = value
-    # --- FIN DE LA CORRECCIÓN ---
 
-    # Añadir/Sobrescribir author_user_id y organization_id para asegurar que son los correctos
-    data_to_insert['author_user_id'] = str(author_id)
-    data_to_insert['organization_id'] = str(organization_id)
-    # Asegurar que el status es 'draft'
-    data_to_insert['status'] = 'draft'
+    data_to_insert.update({
+        'author_user_id': str(author_id),
+        'organization_id': str(organization_id),
+        'status': 'draft'
+    })
 
     try:
-        response = await asyncio.to_thread(
-            supabase_client.table("posts")
-            .insert(data_to_insert)
-            .execute
-        )
-        
+        response = supabase_client.table("posts").insert(data_to_insert).execute()
         if not response.data:
-            logger.error(f"Supabase no devolvió datos al crear el post. Respuesta: {response}")
-            # Podrías revisar response.error si existe
-            error_message = "Error al crear el post en la base de datos: no se recibieron datos."
-            if hasattr(response, 'error') and response.error:
-                error_message = f"Error de Supabase al crear post: {response.error.message}"
-            raise RuntimeError(error_message)
-            
-        logger.info(f"Post creado exitosamente con ID: {response.data[0].get('id')}")
-        return response.data[0] # Devuelve el primer (y único) post creado
-        
-    except Exception as e: # Captura más genérica para errores de DB o asyncio
+            raise RuntimeError("Error al crear post: la DB no devolvió datos.")
+        return response.data[0]
+    except Exception as e:
         logger.error(f"Excepción al crear post en Supabase: {e}", exc_info=True)
         raise RuntimeError(f"No se pudo guardar el borrador del post: {str(e)}")
     
-from app.prompts import templates as prompt_templates # Asegúrate que esté importado
+
 
 
 
