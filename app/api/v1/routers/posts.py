@@ -52,7 +52,7 @@ class DeletedFilterEnum(str, Enum):
 router = APIRouter()
 
 @router.get(
-    "/",
+    "",
     response_model=List[Dict[str, Any]],
     summary="Obtener Lista de Posts (con filtros avanzados)",
     description="Devuelve una lista de posts del usuario autenticado dentro de su organización, con opciones para filtrar.",

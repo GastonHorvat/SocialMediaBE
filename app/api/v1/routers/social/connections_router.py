@@ -17,11 +17,6 @@ from app.services.oauth_state_service import oauth_state_service
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# --- Códigos de color para la terminal ---
-COLOR_RED = "\033[91m"
-COLOR_YELLOW = "\033[93m"
-COLOR_RESET = "\033[0m"
-
 @router.get("", response_model=List[ConnectionResponse], summary="Listar Conexiones Sociales")
 def list_connections(current_user: TokenData = Depends(get_current_user)):
     """Obtiene todas las conexiones sociales para la organización del usuario."""
@@ -64,11 +59,7 @@ async def connect_linkedin(current_user: TokenData = Depends(get_current_user)):
         organization_id=current_user.organization_id
     )
 
-    redirect_uri = settings.LINKEDIN_REDIRECT_URI
-    print(f"\n{COLOR_YELLOW}--- PASO 1: CONSTRUYENDO URL DE AUTORIZACIÓN ---")
-    print(f"Enviando 'redirect_uri' al navegador: {redirect_uri}")
-    print(f"----------------------------------------------------{COLOR_RESET}\n")
-    # --- FIN DEL BLOQUE DE DEPURACIÓN 1 ---    
+    redirect_uri = settings.LINKEDIN_REDIRECT_URI 
     authorization_url_object = await oauth.linkedin.create_authorization_url(
         redirect_uri=redirect_uri,
         state=state,
@@ -80,10 +71,6 @@ async def connect_linkedin(current_user: TokenData = Depends(get_current_user)):
 
 @router.get("/linkedin/callback", summary="Callback de LinkedIn para finalizar conexión", include_in_schema=False)
 async def linkedin_callback(request: Request):
-    """
-    Paso 2 del flujo OAuth: Procesa la respuesta de LinkedIn, valida el estado,
-    intercambia el código por un token y crea la conexión.
-    """
     state = request.query_params.get('state')
     frontend_redirect_url = f"{settings.FRONTEND_URL}/settings?tab=connections"
 
@@ -108,13 +95,6 @@ async def linkedin_callback(request: Request):
         # Se construye la llamada a 'fetch_access_token' con todos los parámetros
         # requeridos explícitamente por la especificación OAuth 2.0 (RFC 6749).
         redirect_uri = settings.LINKEDIN_REDIRECT_URI
-        # --- INICIO DEL BLOQUE DE DEPURACIÓN 2 ---
-        print(f"\n{COLOR_RED}--- PASO 2: VERIFICACIÓN EN EL CALLBACK ---")
-        print(f"Enviando para el intercambio de token con los siguientes parámetros:")
-        print(f"  > code:          {code[:30]}...")
-        print(f"  > redirect_uri:  {redirect_uri}")
-        print(f"-------------------------------------------{COLOR_RESET}\n")
-        # --- FIN DEL BLOQUE DE DEPURACIÓN 2 ---
         token_data = await oauth.linkedin.fetch_access_token(
             code=code,
             redirect_uri=redirect_uri, # Requerido por el protocolo para validación.
