@@ -1,5 +1,34 @@
 # CHANGELOG BE
 
+# Changelog
+
+## [No Lanzado] - 2025-06-19 (Sesión de Estabilización de Arquitectura)
+
+### 🛠 Mejoras y Cambios Técnicos
+
+*   **Re-Arquitectura Completa del Flujo OAuth 2.0 (LinkedIn):**
+    *   Se ha reemplazado por completo la dependencia de la librería `authlib` para la orquestación del flujo. Se ha implementado un flujo **manual y explícito** que sigue la especificación de LinkedIn al pie de la letra, usando `httpx` para el intercambio de tokens.
+    *   Esta decisión elimina la "magia" y las capas de abstracción que causaban errores impredecibles (`ValueError`, `TypeError`, `401 invalid_client`), dándonos **control total y transparencia** sobre el proceso.
+
+*   **Implementación de Gestión de Estado OAuth en Base de Datos:**
+    *   Se ha adoptado una estrategia **stateless** a nivel de aplicación, la cual es el estándar de oro para arquitecturas robustas.
+    *   Se creó y se integró un nuevo servicio (`oauth_state_service.py`) y una tabla (`oauth_states`) para persistir de forma segura y temporal el `state` y el `code_verifier` (PKCE).
+    *   **Resultado:** Esta arquitectura es inmune a los problemas de `CookieNotFound` y a las redirecciones (`307`) que plagaron las implementaciones anteriores.
+
+*   **Consolidación de la Arquitectura de Servicios:**
+    *   Se ha establecido un patrón claro para la creación de nuevos servicios, asegurando que las dependencias (`supabase_client`) se importen directamente y los constructores se mantengan simples, solucionando errores de `TypeError` en la inicialización.
+
+### 🐛 Correcciones de Errores
+
+*   **Solucionado Error Crítico `401 invalid_client`:**
+    *   Se ha resuelto el bloqueo final del flujo de LinkedIn. El error `Client authentication failed` fue solucionado al abandonar la capa de abstracción de `authlib` y construir una petición `POST` manual y explícita al endpoint `accessToken`, asegurando que todos los parámetros requeridos (`client_id`, `client_secret`, etc.) se envíen correctamente.
+
+*   **Erradicados Errores `ValueError` y `TypeError` en Flujo OAuth:**
+    *   Se han eliminado por completo los errores recurrentes `ValueError: too many values to unpack` y `TypeError: 'str' object cannot be interpreted as an integer` al reemplazar las llamadas ambiguas a `authlib` por la nueva implementación manual.
+
+*   **Resueltos Errores de Arranque del Servidor (`NameError`, `ImportError`):**
+    *   Se han solucionado todos los errores que impedían el reinicio del servidor, incluyendo la corrección de rutas de importación (`app.services.social.oauth_state_service`) y la adición de `__init__.py` en los directorios de servicios para que Python los reconozca como paquetes válidos.
+
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Changelog
